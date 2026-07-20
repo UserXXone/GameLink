@@ -252,4 +252,4 @@ olduğu için (PowerShell burada mevcut değil) çalıştırılarak test edileme
 mantık standart, belgelenmiş Win32 `SendInput` kalıbını izliyor. Kendi
 makinenizde ilk çalıştırmada bir sorun çıkarsa (özellikle scan code/klavye
 düzeni uyuşmazlığı gibi) bana loglarla birlikte yazın, birlikte
-düzeltelim.
+düzeltelim.   İletişim: mehmetozkal12@gmail.com
