@@ -1,0 +1,35 @@
+# /etc/nginx/sites-available/gamelink
+# Kurulumdan sonra: sudo ln -s /etc/nginx/sites-available/gamelink /etc/nginx/sites-enabled/
+# "sizin-domaininiz.com" kısmını kendi alan adınızla değiştirin.
+
+server {
+    listen 80;
+    server_name sizin-domaininiz.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name sizin-domaininiz.com;
+
+    # certbot bu satırları otomatik ekleyecek (aşağıdaki kurulum adımına bakın)
+    ssl_certificate     /etc/letsencrypt/live/sizin-domaininiz.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sizin-domaininiz.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
+    }
+}
