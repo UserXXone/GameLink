@@ -1,4 +1,4 @@
-# GameLink — Kendi Uzak Oyun Erişim Sistemin
+# GameLink — Açık Kaynak Kendi Uzak Oyun Erişim Sistemin
 
 Kod + parola ile, onay ekranı olmadan bağlanan, oyun için optimize edilmiş
 uzak masaüstü sistemi. WebRTC üzerinden çalışır; görüntü host↔client arasında
