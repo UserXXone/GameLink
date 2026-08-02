@@ -6,6 +6,10 @@ let mouseDc, keysDc, controlDc;
 let config;
 let reconnectTimer;
 let connectedDeviceName = null;
+let captureStream = null;
+let lastSettings = null;
+let clipboardTimer = null;
+let lastClipboardText = '';
 
 function log(msg) {
   console.log(msg);
@@ -29,6 +33,10 @@ async function refreshConfigUI(cfg) {
   $('codeDisplay').textContent = cfg.hostCode;
   $('urlInput').value = cfg.signalingUrl;
   $('passwordInput').placeholder = cfg.hasPassword ? '•••••••• (ayarlı)' : 'Henüz parola ayarlanmadı';
+  $('turnUrlInput').value = cfg.turn.url || '';
+  $('turnUserInput').value = cfg.turn.username || '';
+  $('turnPassInput').value = cfg.turn.credential || '';
+  $('clipboardToggle').checked = !!cfg.clipboardSync;
   renderDeviceList(cfg.trustedDevices);
 }
 
@@ -62,6 +70,23 @@ function renderDeviceList(devices) {
   }
 }
 
+async function refreshSourceList() {
+  const sources = await window.hostAPI.listSources();
+  const select = $('sourceSelect');
+  select.innerHTML = '';
+  for (const s of sources) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name + (s.primary ? ' (birincil)' : '');
+    select.appendChild(opt);
+  }
+  const current = config.captureSourceId && sources.some((s) => s.id === config.captureSourceId)
+    ? config.captureSourceId
+    : (sources[0] && sources[0].id);
+  if (current) select.value = current;
+  return sources;
+}
+
 function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s;
@@ -74,8 +99,15 @@ $('regenBtn').addEventListener('click', async () => {
   const updated = await window.hostAPI.regenerateCode();
   await refreshConfigUI(updated);
   log('Yeni kod üretildi: ' + updated.hostCode);
-  connect(); // yeni kodla sunucuya yeniden kaydol
+  reconnectNow(); // yeni kodla sunucuya yeniden kaydol
 });
+
+// Açık bir soket varsa kapat: onclose zaten yeniden bağlanmayı tetikler. Böylece
+// aynı anda iki soket açılıp sunucudan "Bu kod zaten kullanımda" hatası alınmaz.
+function reconnectNow() {
+  if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+  else connect();
+}
 
 $('savePasswordBtn').addEventListener('click', async () => {
   const val = $('passwordInput').value;
@@ -94,8 +126,33 @@ $('saveUrlBtn').addEventListener('click', async () => {
   await refreshConfigUI(updated);
   $('urlHint').textContent = 'Kaydedildi, yeniden bağlanılıyor...';
   setTimeout(() => ($('urlHint').textContent = ''), 2500);
-  if (ws) ws.close();
-  connect();
+  reconnectNow();
+});
+
+$('saveTurnBtn').addEventListener('click', async () => {
+  const updated = await window.hostAPI.saveSettings({
+    turn: {
+      url: $('turnUrlInput').value.trim(),
+      username: $('turnUserInput').value,
+      credential: $('turnPassInput').value,
+    },
+  });
+  await refreshConfigUI(updated);
+  $('turnHint').textContent = updated.turn.url
+    ? 'Kaydedildi. Bir sonraki bağlantıda geçerli olur.'
+    : 'TURN kapatıldı (sadece STUN kullanılacak).';
+  setTimeout(() => ($('turnHint').textContent = ''), 3500);
+});
+
+$('clipboardToggle').addEventListener('change', async () => {
+  const updated = await window.hostAPI.saveSettings({ clipboardSync: $('clipboardToggle').checked });
+  await refreshConfigUI(updated);
+  if (!updated.clipboardSync) stopClipboardSync();
+  else if (pc) startClipboardSync();
+});
+
+$('sourceSelect').addEventListener('change', async () => {
+  await switchSource($('sourceSelect').value);
 });
 
 // ---------------- Sinyalleşme ----------------
@@ -103,11 +160,13 @@ $('saveUrlBtn').addEventListener('click', async () => {
 async function main() {
   const cfg = await window.hostAPI.getConfig();
   await refreshConfigUI(cfg);
+  await refreshSourceList();
   connect();
 }
 
 function connect() {
   if (!config.signalingUrl) return;
+  clearTimeout(reconnectTimer);
   setStatus('Sunucuya bağlanılıyor...', 'waiting');
   ws = new WebSocket(config.signalingUrl);
 
@@ -151,7 +210,9 @@ function connect() {
 }
 
 function sendSignal(payload) {
-  ws.send(JSON.stringify({ type: 'signal', payload }));
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'signal', payload }));
+  }
 }
 
 async function handleJoinRequest(data) {
@@ -159,7 +220,7 @@ async function handleJoinRequest(data) {
   log(`Bağlantı isteği: ${deviceName} (${hwid ? hwid.slice(0, 8) : 'hwid yok'})`);
 
   const result = await window.hostAPI.evaluateJoin(hwid, deviceName, passwordHash);
-  if (result.config) refreshConfigUI(result.config);
+  if (result.config) await refreshConfigUI(result.config);
 
   if (!result.accept) {
     log(`Reddedildi: ${deviceName} — ${result.reason}`);
@@ -170,20 +231,28 @@ async function handleJoinRequest(data) {
   log(`Kabul edildi: ${deviceName}`);
   connectedDeviceName = deviceName;
   ws.send(JSON.stringify({ type: 'join-decision', clientId, accept: true }));
-  await startPeerConnection();
+
+  try {
+    await startPeerConnection();
+  } catch (e) {
+    log('Yayın başlatılamadı: ' + e.message);
+    closePeerConnection();
+  }
 }
 
 // ---------------- WebRTC ----------------
 
+async function captureScreen() {
+  return navigator.mediaDevices.getDisplayMedia({
+    video: { frameRate: { ideal: 60, max: 60 } },
+    audio: true, // sistem sesi (loopback), main.js'te ayarlandı
+  });
+}
+
 async function startPeerConnection() {
   closePeerConnection();
 
-  pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  });
+  pc = new RTCPeerConnection({ iceServers: config.iceServers });
 
   pc.onicecandidate = (ev) => { if (ev.candidate) sendSignal({ candidate: ev.candidate }); };
   pc.onconnectionstatechange = () => {
@@ -191,27 +260,32 @@ async function startPeerConnection() {
     if (pc.connectionState === 'connected') {
       setStatus(`Bağlı: ${connectedDeviceName || ''}`, 'connected');
     } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+      // Bağlantı düştüğünde basılı kalan tuş/butonları serbest bırak.
+      window.hostAPI.releaseAllInputs();
       setStatus('Bekleniyor', 'waiting');
     }
   };
 
   mouseDc = pc.createDataChannel('mouse', { ordered: false, maxRetransmits: 0 });
   keysDc = pc.createDataChannel('keys'); // güvenilir (ordered, retransmit) - tuş kaybı olmasın
-  controlDc = pc.createDataChannel('control'); // güvenilir - mod/kalite ayarları
+  controlDc = pc.createDataChannel('control'); // güvenilir - mod/kalite/monitör/pano
 
   mouseDc.onmessage = (ev) => handleInputMessage(safeParse(ev.data));
   keysDc.onmessage = (ev) => handleInputMessage(safeParse(ev.data));
+  keysDc.onclose = () => window.hostAPI.releaseAllInputs();
   controlDc.onmessage = (ev) => handleControlMessage(safeParse(ev.data));
+  controlDc.onopen = () => {
+    sendSources();
+    if (config.clipboardSync) startClipboardSync();
+  };
 
-  const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: { frameRate: { ideal: 30, max: 60 } },
-    audio: true, // sistem sesi (loopback), main.js'te ayarlandı
-  });
-  stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+  captureStream = await captureScreen();
+  captureStream.getTracks().forEach((track) => pc.addTrack(track, captureStream));
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  sendSignal({ sdp: offer });
+  // ICE sunucu listesi offer ile birlikte gider: client, TURN bilgisini host'tan öğrenir.
+  sendSignal({ sdp: offer, iceServers: config.iceServers });
 
   // Varsayılan: "Dengeli" preset + "Oyun" modu ayarları
   applySettings({
@@ -231,18 +305,73 @@ function handleInputMessage(cmd) {
   switch (cmd.t) {
     case 'm': window.hostAPI.injectMouseMove(cmd.dx, cmd.dy); break;
     case 'b': window.hostAPI.injectMouseButton(cmd.btn, cmd.down); break;
-    case 'w': window.hostAPI.injectWheel(cmd.delta); break;
+    case 'w': window.hostAPI.injectWheel(cmd.delta, cmd.h); break;
     case 'k': window.hostAPI.injectKey(cmd.scan, cmd.ext, cmd.down); break;
+    case 'r': window.hostAPI.releaseAllInputs(); break;
   }
 }
 
 function handleControlMessage(msg) {
   if (!msg) return;
-  if (msg.t === 'settings') applySettings(msg);
+  switch (msg.t) {
+    case 'settings': applySettings(msg); break;
+    case 'get-sources': sendSources(); break;
+    case 'set-source': switchSource(msg.id); break;
+    case 'clip': receiveClipboard(msg.text); break;
+  }
+}
+
+function sendControl(obj) {
+  if (controlDc && controlDc.readyState === 'open') controlDc.send(JSON.stringify(obj));
+}
+
+async function sendSources() {
+  const sources = await refreshSourceList();
+  sendControl({ t: 'sources', list: sources, current: $('sourceSelect').value });
+}
+
+// Monitör değişimi: yeniden pazarlık (renegotiation) yapmadan, sadece gönderilen
+// video track'i değiştirilir - görüntü kesilmez, ses akışı bozulmaz.
+async function switchSource(sourceId) {
+  if (!sourceId) return;
+  const updated = await window.hostAPI.setCaptureSource(sourceId);
+  await refreshConfigUI(updated);
+  $('sourceSelect').value = sourceId;
+
+  if (!pc || !captureStream) return;
+
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (!sender) return;
+
+  let newStream;
+  try {
+    newStream = await captureScreen();
+  } catch (e) {
+    log('Monitör değiştirilemedi: ' + e.message);
+    return;
+  }
+
+  const newVideo = newStream.getVideoTracks()[0];
+  if (!newVideo) return;
+  // Yeni yakalamanın ses track'ine ihtiyaç yok, mevcut ses akışı korunuyor.
+  newStream.getAudioTracks().forEach((t) => t.stop());
+
+  const oldVideo = sender.track;
+  await sender.replaceTrack(newVideo);
+  if (oldVideo) {
+    captureStream.removeTrack(oldVideo);
+    oldVideo.stop();
+  }
+  captureStream.addTrack(newVideo);
+
+  if (lastSettings) applySettings(lastSettings);
+  log('Monitör değiştirildi.');
+  sendSources();
 }
 
 async function applySettings(s) {
   if (!pc) return;
+  lastSettings = { ...lastSettings, ...s };
   const sender = pc.getSenders().find((snd) => snd.track && snd.track.kind === 'video');
   if (!sender) return;
   const params = sender.getParameters();
@@ -262,6 +391,7 @@ async function applySettings(s) {
 }
 
 async function handleSignal(payload) {
+  if (!pc) return; // eşleşme kapandıktan sonra gelen geç sinyalleri yoksay
   if (payload.sdp) {
     await pc.setRemoteDescription(payload.sdp);
   } else if (payload.candidate) {
@@ -269,11 +399,49 @@ async function handleSignal(payload) {
   }
 }
 
-function closePeerConnection() {
-  if (mouseDc) { mouseDc.close(); mouseDc = null; }
-  if (keysDc) { keysDc.close(); keysDc = null; }
-  if (controlDc) { controlDc.close(); controlDc = null; }
-  if (pc) { pc.close(); pc = null; }
+// ---------------- Pano senkronizasyonu ----------------
+
+function startClipboardSync() {
+  stopClipboardSync();
+  window.hostAPI.readClipboard().then((text) => { lastClipboardText = text || ''; });
+  clipboardTimer = setInterval(async () => {
+    if (!config.clipboardSync) return;
+    const text = (await window.hostAPI.readClipboard()) || '';
+    if (text && text !== lastClipboardText) {
+      lastClipboardText = text;
+      sendControl({ t: 'clip', text });
+    }
+  }, 1200);
 }
+
+function stopClipboardSync() {
+  if (clipboardTimer) { clearInterval(clipboardTimer); clipboardTimer = null; }
+}
+
+function receiveClipboard(text) {
+  if (!config.clipboardSync || typeof text !== 'string') return;
+  if (text === lastClipboardText) return;
+  lastClipboardText = text; // kendi yazdığımızı geri göndermemek için
+  window.hostAPI.writeClipboard(text);
+  log('Pano client\'tan alındı.');
+}
+
+// ---------------- Temizlik ----------------
+
+function closePeerConnection() {
+  stopClipboardSync();
+  window.hostAPI.releaseAllInputs();
+  if (mouseDc) { mouseDc.close(); mouseDc = null; }
+  if (keysDc) { keysDc.onclose = null; keysDc.close(); keysDc = null; }
+  if (controlDc) { controlDc.close(); controlDc = null; }
+  if (captureStream) {
+    captureStream.getTracks().forEach((t) => t.stop());
+    captureStream = null;
+  }
+  if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
+  lastSettings = null;
+}
+
+window.addEventListener('beforeunload', closePeerConnection);
 
 main();

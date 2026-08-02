@@ -39,6 +39,7 @@ public static class InputSim
     const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
     const uint MOUSEEVENTF_WHEEL = 0x0800;
+    const uint MOUSEEVENTF_HWHEEL = 0x1000;
 
     const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     const uint KEYEVENTF_KEYUP = 0x0002;
@@ -76,12 +77,12 @@ public static class InputSim
         SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
     }
 
-    public static void Wheel(int delta)
+    public static void Wheel(int delta, bool horizontal)
     {
         INPUT[] inputs = new INPUT[1];
         inputs[0].type = INPUT_MOUSE;
         inputs[0].U.mi.mouseData = unchecked((uint)delta);
-        inputs[0].U.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        inputs[0].U.mi.dwFlags = horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
         SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
     }
 
@@ -102,23 +103,65 @@ public static class InputSim
 
 Add-Type -TypeDefinition $code -Language CSharp
 
+# ---- Basılı durum takibi ----
+# Köprünün kendisi neyi bastığını bilir; böylece bağlantı koptuğunda (ya da bu süreç
+# kapanırken) hiçbir tuş/buton basılı kalmaz. "Forza'da gaz tuşunun yapışması"
+# senaryosunun son savunma hattı budur - renderer çökse bile burada temizlenir.
+$pressedKeys = @{}      # "scan:ext" -> @{ scan = <int>; ext = <bool> }
+$pressedButtons = @{}   # "left"/"right"/"middle" -> $true
+
+function Release-All {
+    foreach ($entry in @($pressedKeys.Values)) {
+        try { [InputSim]::Key([uint16]$entry.scan, [bool]$entry.ext, $false) } catch { }
+    }
+    $pressedKeys.Clear()
+
+    foreach ($btn in @($pressedButtons.Keys)) {
+        try { [InputSim]::MouseButton($btn, $false) } catch { }
+    }
+    $pressedButtons.Clear()
+}
+
 Write-Output "READY"
 
-while ($true) {
-    $line = [Console]::In.ReadLine()
-    if ($null -eq $line) { break }
-    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+try {
+    while ($true) {
+        $line = [Console]::In.ReadLine()
+        if ($null -eq $line) { break }
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
 
-    try {
-        $cmd = $line | ConvertFrom-Json
-        switch ($cmd.t) {
-            "m" { [InputSim]::MoveRelative([int]$cmd.dx, [int]$cmd.dy) }
-            "b" { [InputSim]::MouseButton($cmd.btn, [bool]$cmd.down) }
-            "w" { [InputSim]::Wheel([int]$cmd.delta) }
-            "k" { [InputSim]::Key([uint16]$cmd.scan, [bool]$cmd.ext, [bool]$cmd.down) }
+        try {
+            $cmd = $line | ConvertFrom-Json
+            switch ($cmd.t) {
+                "m" { [InputSim]::MoveRelative([int]$cmd.dx, [int]$cmd.dy) }
+                "b" {
+                    $down = [bool]$cmd.down
+                    [InputSim]::MouseButton($cmd.btn, $down)
+                    if ($down) { $pressedButtons[$cmd.btn] = $true }
+                    else { $pressedButtons.Remove($cmd.btn) }
+                }
+                "w" {
+                    $horizontal = $false
+                    if ($null -ne $cmd.h) { $horizontal = [bool]$cmd.h }
+                    [InputSim]::Wheel([int]$cmd.delta, $horizontal)
+                }
+                "k" {
+                    $scan = [int]$cmd.scan
+                    $ext = [bool]$cmd.ext
+                    $down = [bool]$cmd.down
+                    [InputSim]::Key([uint16]$scan, $ext, $down)
+                    $key = "$scan`:$ext"
+                    if ($down) { $pressedKeys[$key] = @{ scan = $scan; ext = $ext } }
+                    else { $pressedKeys.Remove($key) }
+                }
+                "r" { Release-All }
+            }
+        } catch {
+            # geçersiz satırı yoksay, döngü kesilmesin
+            continue
         }
-    } catch {
-        # geçersiz satırı yoksay, döngü kesilmesin
-        continue
     }
+} finally {
+    # stdin kapandı (host süreci öldü/kapandı) - hiçbir şey basılı kalmasın
+    Release-All
 }

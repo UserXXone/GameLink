@@ -86,6 +86,25 @@
   .custom-row { display: flex; gap: 6px; margin-bottom: 8px; }
   .custom-row label { font-size: 10px; color: #9aa3b5; display: block; margin-bottom: 3px; }
   .custom-row input { width: 100%; padding: 6px 8px; font-size: 12px; border-radius: 6px; border: 1px solid #2a3040; background: #0f1219; color: #e6e8ee; }
+
+  #settingsPanel select {
+    width: 100%; padding: 7px 8px; font-size: 12px; border-radius: 6px;
+    border: 1px solid #2a3040; background: #0f1219; color: #e6e8ee; margin-bottom: 14px;
+  }
+  .toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .toggle-row input[type=checkbox] { width: 14px; height: 14px; accent-color: #5b8cff; }
+  .toggle-row label { font-size: 12px; color: #cfd4e0; }
+
+  #statsInfo { color: #9aa3b5; font-size: 11px; font-family: "Consolas", monospace; }
+  #statsBox {
+    position: absolute; top: 52px; left: 16px; background: rgba(15,18,25,.92);
+    border: 1px solid #262c3d; border-radius: 10px; padding: 10px 12px; display: none;
+    font-size: 11px; min-width: 190px;
+  }
+  #statsBox.open { display: block; }
+  #statsBox div { display: flex; justify-content: space-between; gap: 16px; padding: 3px 0; }
+  #statsBox span { color: #7d879c; }
+  #statsBox b { font-family: "Consolas", monospace; color: #cfd4e0; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -114,13 +133,23 @@
   <video id="remoteVideo" autoplay playsinline></video>
 
   <div id="topBar">
-    <span id="hint">Fareyi kilitlemek için tıklayın · ESC ile çıkış</span>
+    <span id="hint">Fareyi kilitlemek için tıklayın · ESC ile çıkış · F11 tam ekran</span>
+    <span id="statsInfo"></span>
     <div class="spacer"></div>
+    <button id="statsBtn">📊 İstatistik</button>
+    <button id="fullscreenBtn">⛶ Tam Ekran</button>
     <button id="settingsBtn">⚙ Ayarlar</button>
     <button id="disconnectBtn">Bağlantıyı Kes</button>
   </div>
 
+  <div id="statsBox"></div>
+
   <div id="settingsPanel">
+    <div id="monitorSection" style="display:none;">
+      <h3>Monitör</h3>
+      <select id="monitorSelect"></select>
+    </div>
+
     <h3>Mod</h3>
     <div class="seg" id="modeSeg">
       <button data-mode="game" class="active">🎮 Oyun</button>
@@ -149,6 +178,12 @@
         </div>
       </div>
       <button id="applyCustomBtn" style="width:100%;padding:8px;background:#5b8cff;color:white;border-radius:6px;font-size:12px;">Uygula</button>
+    </div>
+
+    <h3 style="margin-top:14px;">Pano</h3>
+    <div class="toggle-row">
+      <input id="clipboardToggle" type="checkbox" checked />
+      <label for="clipboardToggle">Panoyu host ile eşitle</label>
     </div>
   </div>
 </div>

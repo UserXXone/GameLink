@@ -24,12 +24,18 @@ const KEYMAP = {
   Numpad4:[0x4B,false], Numpad5:[0x4C,false], Numpad6:[0x4D,false], NumpadAdd:[0x4E,false],
   Numpad1:[0x4F,false], Numpad2:[0x50,false], Numpad3:[0x51,false],
   Numpad0:[0x52,false], NumpadDecimal:[0x53,false],
-  F11:[0x57,false], F12:[0x58,false],
+  IntlBackslash:[0x56,false], F11:[0x57,false], F12:[0x58,false],
   ControlRight:[0x1D,true], AltRight:[0x38,true], NumpadEnter:[0x1C,true], NumpadDivide:[0x35,true],
   ArrowUp:[0x48,true], ArrowLeft:[0x4B,true], ArrowRight:[0x4D,true], ArrowDown:[0x50,true],
   Insert:[0x52,true], Delete:[0x53,true], Home:[0x47,true], End:[0x4F,true],
   PageUp:[0x49,true], PageDown:[0x51,true],
+  MetaLeft:[0x5B,true], MetaRight:[0x5C,true], ContextMenu:[0x5D,true],
+  PrintScreen:[0x37,true], Pause:[0x45,true],
 };
+
+// Bu tuşlar host'a "basılı tutma" olarak gitmez: ESC yerel olarak fare kilidini
+// açtığı için tarayıcı keyup'ı vermeyebilir, o yüzden tek dokunuş olarak gönderilir.
+const TAP_ONLY = new Set(['Escape']);
 
 // ---- Kalite / mod tanımları ----
 const QUALITY_PRESETS = {
@@ -43,10 +49,27 @@ const MODE_PRESETS = {
   stream: { degradationPreference: 'balanced',            playoutDelayHint: 0.4 },
 };
 
+const DEFAULT_ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
 let ws, pc, mouseDc, keysDc, controlDc;
 let hwid, deviceName;
 let currentMode = 'game';
 let currentQuality = 'balanced';
+let pendingCandidates = [];
+let remoteDescriptionSet = false;
+let statsTimer = null;
+let lastStatsSample = null;
+let clipboardTimer = null;
+let lastClipboardText = '';
+let clipboardSync = true;
+
+// Basılı tuşlar/butonlar: fare kilidi bırakıldığında ya da pencere odağı gidince
+// host'ta hiçbir şey basılı kalmasın diye takip ediliyor.
+const pressedKeys = new Map(); // e.code -> [scan, ext]
+const pressedButtons = new Set();
 
 // ---------------- Başlangıç ----------------
 
@@ -102,6 +125,8 @@ async function sha256Hex(str) {
 // ---------------- Bağlantı formu ----------------
 
 $('connectBtn').addEventListener('click', connect);
+$('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+$('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
 
 function setConnectStatus(msg, isErr) {
   $('connectStatus').textContent = msg || '';
@@ -117,6 +142,8 @@ async function connect() {
     setConnectStatus('Sunucu adresi ve kod gerekli.', true);
     return;
   }
+
+  closeConnection(); // önceki denemeden kalan soket/peer varsa temizle
 
   $('connectBtn').disabled = true;
   setConnectStatus('Bağlanılıyor...');
@@ -134,12 +161,12 @@ async function connect() {
     switch (data.type) {
       case 'joined':
         setConnectStatus('Bağlandı, video bekleniyor...');
-        setupPeerConnection();
+        pendingCandidates = [];
+        remoteDescriptionSet = false;
         await window.clientAPI.saveConnection({ signalingUrl: url, code, label: code });
         break;
       case 'error':
-        setConnectStatus(data.message, true);
-        $('connectBtn').disabled = false;
+        handleJoinError(data.message);
         break;
       case 'signal':
         await handleSignal(data.payload);
@@ -155,18 +182,41 @@ async function connect() {
   ws.onclose = () => { $('connectBtn').disabled = false; };
 }
 
-function setupPeerConnection() {
-  pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  });
+function handleJoinError(message) {
+  setConnectStatus(message, true);
+  $('connectBtn').disabled = false;
+  showConnectView();
+  // Host bu cihazı tanımıyorsa parola isteniyor demektir - kullanıcıyı doğrudan
+  // parola alanına yönlendir.
+  if (/parola/i.test(message || '')) {
+    $('password').focus();
+    $('password').select();
+  }
+}
+
+// Peer connection, host'un offer'ı ile birlikte gönderdiği ICE sunucu listesi
+// kullanılarak kurulur; TURN ayarı sadece host'ta tutulur.
+function ensurePeerConnection(iceServers) {
+  if (pc) return;
+
+  pc = new RTCPeerConnection({ iceServers: iceServers && iceServers.length ? iceServers : DEFAULT_ICE });
 
   pc.onicecandidate = (ev) => { if (ev.candidate) sendSignal({ candidate: ev.candidate }); };
 
+  pc.onconnectionstatechange = () => {
+    if (!pc) return;
+    if (pc.connectionState === 'connected') {
+      setOverlayInfo('Bağlantı kuruldu');
+    } else if (['disconnected', 'failed'].includes(pc.connectionState)) {
+      releaseAllInputs();
+      setOverlayInfo('Bağlantı sorunu: ' + pc.connectionState);
+    }
+  };
+
   pc.ontrack = (ev) => {
-    $('remoteVideo').srcObject = ev.streams[0];
+    const video = $('remoteVideo');
+    video.srcObject = ev.streams[0];
+    video.play().catch(() => { /* otomatik oynatma engellenirse kullanıcı tıklayınca başlar */ });
     showStage();
     applyModeLocally(currentMode); // playoutDelayHint için receiver artık hazır
   };
@@ -176,25 +226,53 @@ function setupPeerConnection() {
     else if (ev.channel.label === 'keys') keysDc = ev.channel;
     else if (ev.channel.label === 'control') {
       controlDc = ev.channel;
-      controlDc.onopen = () => sendCurrentSettings(); // bağlanınca varsayılan mod/kalite host'a bildirilir
+      controlDc.onmessage = (m) => handleControlMessage(safeParse(m.data));
+      controlDc.onopen = () => {
+        sendCurrentSettings(); // bağlanınca varsayılan mod/kalite host'a bildirilir
+        sendControl({ t: 'get-sources' });
+        startClipboardSync();
+      };
     }
   };
 }
 
+function safeParse(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 function sendSignal(payload) {
-  ws.send(JSON.stringify({ type: 'signal', payload }));
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'signal', payload }));
+  }
 }
 
 async function handleSignal(payload) {
   if (payload.sdp) {
+    ensurePeerConnection(payload.iceServers);
     await pc.setRemoteDescription(payload.sdp);
+    remoteDescriptionSet = true;
     if (payload.sdp.type === 'offer') {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendSignal({ sdp: answer });
     }
+    await flushPendingCandidates();
   } else if (payload.candidate) {
+    // Aday, offer'dan önce gelmiş olabilir; peer hazır olana kadar kuyrukta bekletilir.
+    if (!pc || !remoteDescriptionSet) {
+      pendingCandidates.push(payload.candidate);
+      return;
+    }
     try { await pc.addIceCandidate(payload.candidate); } catch (e) { console.error(e); }
+  }
+}
+
+async function flushPendingCandidates() {
+  if (!pc) return;
+  const queued = pendingCandidates;
+  pendingCandidates = [];
+  for (const candidate of queued) {
+    try { await pc.addIceCandidate(candidate); } catch (e) { console.error(e); }
   }
 }
 
@@ -203,24 +281,35 @@ async function handleSignal(payload) {
 function showStage() {
   $('connectView').style.display = 'none';
   $('stageView').style.display = 'block';
+  startStats();
 }
 function showConnectView() {
   $('stageView').style.display = 'none';
   $('connectView').style.display = 'flex';
   $('connectBtn').disabled = false;
+  $('settingsPanel').classList.remove('open');
+  setFullscreen(false);
   closeConnection();
 }
 
 $('disconnectBtn').addEventListener('click', () => {
+  setConnectStatus('');
   showConnectView();
 });
 
 function closeConnection() {
+  stopStats();
+  stopClipboardSync();
+  releaseAllInputs();
+  if (document.pointerLockElement) document.exitPointerLock();
   if (mouseDc) { mouseDc.close(); mouseDc = null; }
   if (keysDc) { keysDc.close(); keysDc = null; }
   if (controlDc) { controlDc.close(); controlDc = null; }
-  if (pc) { pc.close(); pc = null; }
-  if (ws) { ws.close(); ws = null; }
+  if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  pendingCandidates = [];
+  remoteDescriptionSet = false;
+  $('remoteVideo').srcObject = null;
 }
 
 // ---------------- Girdi yakalama (Pointer Lock ile RELATIVE fare) ----------------
@@ -238,39 +327,226 @@ const btnName = (n) => (n === 0 ? 'left' : n === 1 ? 'middle' : n === 2 ? 'right
 document.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== video) return;
   const b = btnName(e.button);
-  if (b) sendMouse({ t: 'b', btn: b, down: true });
+  if (!b) return;
+  pressedButtons.add(b);
+  sendMouse({ t: 'b', btn: b, down: true });
 });
 document.addEventListener('mouseup', (e) => {
   if (document.pointerLockElement !== video) return;
   const b = btnName(e.button);
-  if (b) sendMouse({ t: 'b', btn: b, down: false });
+  if (!b) return;
+  pressedButtons.delete(b);
+  sendMouse({ t: 'b', btn: b, down: false });
 });
 document.addEventListener('contextmenu', (e) => {
   if (document.pointerLockElement === video) e.preventDefault();
 });
 document.addEventListener('wheel', (e) => {
   if (document.pointerLockElement !== video) return;
-  sendMouse({ t: 'w', delta: -Math.sign(e.deltaY) * 120 });
+  if (e.deltaY) sendMouse({ t: 'w', delta: -Math.sign(e.deltaY) * 120 });
+  if (e.deltaX) sendMouse({ t: 'w', delta: Math.sign(e.deltaX) * 120, h: true });
 }, { passive: true });
 
 document.addEventListener('keydown', (e) => {
+  if (e.code === 'F11' && document.pointerLockElement !== video) {
+    e.preventDefault();
+    toggleFullscreen();
+    return;
+  }
   if (document.pointerLockElement !== video) return;
   const m = KEYMAP[e.code];
   if (!m) return;
   e.preventDefault();
+  if (e.repeat) return; // tekrar eden keydown'ları göndermeye gerek yok, host tuşu basılı tutuyor
+
+  if (TAP_ONLY.has(e.code)) {
+    // ESC fare kilidini açtığı için keyup gelmeyebilir: tek dokunuş olarak gönder.
+    sendKey({ t: 'k', scan: m[0], ext: m[1], down: true });
+    sendKey({ t: 'k', scan: m[0], ext: m[1], down: false });
+    return;
+  }
+
+  pressedKeys.set(e.code, m);
   sendKey({ t: 'k', scan: m[0], ext: m[1], down: true });
 });
+
 document.addEventListener('keyup', (e) => {
-  if (document.pointerLockElement !== video) return;
   const m = KEYMAP[e.code];
   if (!m) return;
+  if (!pressedKeys.has(e.code)) return;
   e.preventDefault();
+  pressedKeys.delete(e.code);
   sendKey({ t: 'k', scan: m[0], ext: m[1], down: false });
 });
+
+// Fare kilidi bırakıldığında (ESC) ya da pencere odağı kaybedildiğinde, o an basılı
+// olan her şeyi host'ta serbest bırak. Aksi halde örneğin gaz tuşu basılı takılır.
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== video) releaseAllInputs();
+});
+window.addEventListener('blur', releaseAllInputs);
+window.addEventListener('beforeunload', closeConnection);
+
+function releaseAllInputs() {
+  for (const [, m] of pressedKeys) sendKey({ t: 'k', scan: m[0], ext: m[1], down: false });
+  pressedKeys.clear();
+  for (const b of pressedButtons) sendMouse({ t: 'b', btn: b, down: false });
+  pressedButtons.clear();
+  // Host tarafındaki köprüye de "her şeyi bırak" de: tek tek gönderdiklerimiz
+  // yolda kaybolsa bile orada basılı hiçbir şey kalmaz.
+  sendKey({ t: 'r' });
+}
 
 function sendMouse(obj) { if (mouseDc && mouseDc.readyState === 'open') mouseDc.send(JSON.stringify(obj)); }
 function sendKey(obj) { if (keysDc && keysDc.readyState === 'open') keysDc.send(JSON.stringify(obj)); }
 function sendControl(obj) { if (controlDc && controlDc.readyState === 'open') controlDc.send(JSON.stringify(obj)); }
+
+// ---------------- Host'tan gelen kontrol mesajları ----------------
+
+function handleControlMessage(msg) {
+  if (!msg) return;
+  switch (msg.t) {
+    case 'sources': renderMonitorList(msg.list, msg.current); break;
+    case 'clip': receiveClipboard(msg.text); break;
+  }
+}
+
+function renderMonitorList(list, current) {
+  const select = $('monitorSelect');
+  const wrap = $('monitorSection');
+  if (!list || list.length <= 1) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  select.innerHTML = '';
+  for (const s of list) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name + (s.primary ? ' (birincil)' : '');
+    select.appendChild(opt);
+  }
+  if (current) select.value = current;
+}
+
+$('monitorSelect').addEventListener('change', () => {
+  sendControl({ t: 'set-source', id: $('monitorSelect').value });
+});
+
+// ---------------- Pano senkronizasyonu ----------------
+
+function startClipboardSync() {
+  stopClipboardSync();
+  window.clientAPI.readClipboard().then((text) => { lastClipboardText = text || ''; });
+  clipboardTimer = setInterval(async () => {
+    if (!clipboardSync) return;
+    const text = (await window.clientAPI.readClipboard()) || '';
+    if (text && text !== lastClipboardText) {
+      lastClipboardText = text;
+      sendControl({ t: 'clip', text });
+    }
+  }, 1200);
+}
+
+function stopClipboardSync() {
+  if (clipboardTimer) { clearInterval(clipboardTimer); clipboardTimer = null; }
+}
+
+function receiveClipboard(text) {
+  if (!clipboardSync || typeof text !== 'string') return;
+  if (text === lastClipboardText) return;
+  lastClipboardText = text; // yankıyı önle
+  window.clientAPI.writeClipboard(text);
+}
+
+$('clipboardToggle').addEventListener('change', () => {
+  clipboardSync = $('clipboardToggle').checked;
+  if (clipboardSync) startClipboardSync();
+  else stopClipboardSync();
+});
+
+// ---------------- Tam ekran ----------------
+
+let isFullscreen = false;
+
+function setFullscreen(on) {
+  isFullscreen = on;
+  window.clientAPI.setFullscreen(on);
+  $('fullscreenBtn').classList.toggle('active', on);
+}
+function toggleFullscreen() { setFullscreen(!isFullscreen); }
+
+$('fullscreenBtn').addEventListener('click', toggleFullscreen);
+
+// ---------------- İstatistikler ----------------
+
+function setOverlayInfo(text) {
+  $('statsInfo').textContent = text;
+}
+
+$('statsBtn').addEventListener('click', () => {
+  const shown = $('statsBox').classList.toggle('open');
+  $('statsBtn').classList.toggle('active', shown);
+});
+
+function startStats() {
+  stopStats();
+  lastStatsSample = null;
+  statsTimer = setInterval(updateStats, 1000);
+}
+
+function stopStats() {
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+}
+
+async function updateStats() {
+  if (!pc) return;
+  let report;
+  try { report = await pc.getStats(); } catch { return; }
+
+  let inbound = null;
+  let pair = null;
+  report.forEach((s) => {
+    if (s.type === 'inbound-rtp' && s.kind === 'video') inbound = s;
+    if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated !== false) pair = s;
+  });
+  if (!inbound) return;
+
+  const now = inbound.timestamp;
+  let mbps = 0;
+  let lossPct = 0;
+  if (lastStatsSample && now > lastStatsSample.timestamp) {
+    const seconds = (now - lastStatsSample.timestamp) / 1000;
+    mbps = ((inbound.bytesReceived - lastStatsSample.bytesReceived) * 8) / seconds / 1e6;
+    const lostDelta = (inbound.packetsLost || 0) - (lastStatsSample.packetsLost || 0);
+    const recvDelta = (inbound.packetsReceived || 0) - (lastStatsSample.packetsReceived || 0);
+    const total = lostDelta + recvDelta;
+    if (total > 0) lossPct = (lostDelta / total) * 100;
+  }
+  lastStatsSample = {
+    timestamp: now,
+    bytesReceived: inbound.bytesReceived,
+    packetsLost: inbound.packetsLost,
+    packetsReceived: inbound.packetsReceived,
+  };
+
+  const rttMs = pair && pair.currentRoundTripTime != null
+    ? Math.round(pair.currentRoundTripTime * 1000)
+    : null;
+  const resolution = inbound.frameWidth ? `${inbound.frameWidth}×${inbound.frameHeight}` : '-';
+  const fps = inbound.framesPerSecond != null ? Math.round(inbound.framesPerSecond) : '-';
+
+  $('statsBox').innerHTML = `
+    <div><span>Çözünürlük</span><b>${resolution}</b></div>
+    <div><span>FPS</span><b>${fps}</b></div>
+    <div><span>Bit hızı</span><b>${mbps.toFixed(2)} Mbps</b></div>
+    <div><span>Gecikme (RTT)</span><b>${rttMs != null ? rttMs + ' ms' : '-'}</b></div>
+    <div><span>Paket kaybı</span><b>${lossPct.toFixed(1)} %</b></div>
+    <div><span>Jitter</span><b>${inbound.jitter != null ? Math.round(inbound.jitter * 1000) + ' ms' : '-'}</b></div>
+  `;
+
+  setOverlayInfo(`${fps} fps · ${mbps.toFixed(1)} Mbps${rttMs != null ? ' · ' + rttMs + ' ms' : ''}`);
+}
 
 // ---------------- Ayarlar paneli (Mod + Kalite) ----------------
 

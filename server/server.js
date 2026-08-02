@@ -7,33 +7,22 @@
 // yapar. Video verisi buradan hiç geçmez (P2P).
 
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
-const CLIENT_DIR = path.join(__dirname, '..', 'client');
-const JOIN_TIMEOUT_MS = 12_000;
+const JOIN_TIMEOUT_MS = Number(process.env.JOIN_TIMEOUT_MS) || 12_000;
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-};
-
+// v2'de client artık bir Electron programı; sunucunun statik dosya sunmasına gerek yok.
+// Geriye kalan tek HTTP ucu, nginx/uptime kontrolü için basit bir sağlık kontrolü.
 const server = http.createServer((req, res) => {
-  let filePath = req.url === '/' ? '/index.html' : req.url;
-  filePath = path.join(CLIENT_DIR, path.normalize(filePath).replace(/^(\.\.[\/\\])+/, ''));
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
-    res.end(data);
-  });
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: Math.round(process.uptime()) }));
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('GameLink signaling server');
 });
 
 const wss = new WebSocket.Server({ server });
@@ -46,6 +35,8 @@ const attempts = new Map(); // ip -> { count, blockedUntil }
 const MAX_ATTEMPTS = 5;
 const BLOCK_MS = 60_000;
 
+const ATTEMPT_TTL_MS = 15 * 60_000;
+
 function isBlocked(ip) {
   const a = attempts.get(ip);
   return !!(a && a.blockedUntil && Date.now() < a.blockedUntil);
@@ -53,6 +44,7 @@ function isBlocked(ip) {
 function registerFail(ip) {
   const a = attempts.get(ip) || { count: 0, blockedUntil: 0 };
   a.count += 1;
+  a.updatedAt = Date.now();
   if (a.count >= MAX_ATTEMPTS) {
     a.blockedUntil = Date.now() + BLOCK_MS;
     a.count = 0;
@@ -69,8 +61,27 @@ function genId() {
   return crypto.randomBytes(8).toString('hex');
 }
 
+function isLoopback(addr) {
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
+// Sunucu nginx'in arkasında çalıştığı için soketin adresi hep 127.0.0.1'dir; bu
+// haliyle bir cihazın 5 hatalı denemesi HERKESİ bloklardı. Bağlantı gerçekten
+// loopback'ten geliyorsa (yani önünde ters vekil varsa) nginx'in eklediği
+// X-Real-IP / X-Forwarded-For başlığına güveniyoruz. Dışarıdan doğrudan gelen
+// bağlantılarda başlık yok sayılır, sahte IP ile blok atlatılamaz.
+function clientIp(req) {
+  const socketAddr = req.socket.remoteAddress;
+  if (!isLoopback(socketAddr)) return socketAddr;
+  const realIp = req.headers['x-real-ip'];
+  if (realIp) return realIp.trim();
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return socketAddr;
+}
+
 wss.on('connection', (ws, req) => {
-  const ip = req.socket.remoteAddress;
+  const ip = clientIp(req);
   ws.isAlive = true;
   ws.on('pong', () => (ws.isAlive = true));
 
@@ -211,6 +222,16 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// Uzun süre çalışan sunucuda deneme kayıtları birikmesin.
+const attemptSweepInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [ip, a] of attempts) {
+    const stale = (a.updatedAt || 0) + ATTEMPT_TTL_MS < now;
+    const unblocked = !a.blockedUntil || a.blockedUntil < now;
+    if (stale && unblocked) attempts.delete(ip);
+  }
+}, 5 * 60_000);
+
 const keepAliveInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
@@ -218,7 +239,10 @@ const keepAliveInterval = setInterval(() => {
     ws.ping();
   });
 }, 30000);
-wss.on('close', () => clearInterval(keepAliveInterval));
+wss.on('close', () => {
+  clearInterval(keepAliveInterval);
+  clearInterval(attemptSweepInterval);
+});
 
 server.listen(PORT, () => {
   console.log(`GameLink sinyalleşme sunucusu ${PORT} portunda çalışıyor`);
