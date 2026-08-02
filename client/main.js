@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard } = require('electron');
 const { machineIdSync } = require('node-machine-id');
 
 let CONFIG_PATH;
@@ -83,4 +83,13 @@ ipcMain.handle('remove-connection', (_e, id) => {
   cfg.savedConnections = cfg.savedConnections.filter((c) => c.id !== id);
   saveConfig(cfg);
   return cfg.savedConnections;
+});
+
+ipcMain.handle('clipboard-read', () => clipboard.readText());
+ipcMain.on('clipboard-write', (_e, text) => {
+  if (typeof text === 'string') clipboard.writeText(text);
+});
+
+ipcMain.on('set-fullscreen', (_e, on) => {
+  if (mainWindow) mainWindow.setFullScreen(!!on);
 });

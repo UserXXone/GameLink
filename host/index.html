@@ -66,6 +66,16 @@
     overflow-y: auto; white-space: pre-wrap; line-height: 1.5;
   }
   .save-hint { font-size: 11px; color: #4caf7d; margin-top: 6px; height: 14px; }
+
+  select {
+    flex: 1; padding: 9px 11px; border-radius: 7px; border: 1px solid #2a3040;
+    background: #0f1219; color: #e6e8ee; font-size: 13px;
+  }
+  select:focus { outline: none; border-color: #5b8cff; }
+  .hint-note { font-size: 11px; color: #7d879c; margin-top: 8px; line-height: 1.5; }
+  .check-row { display: flex; align-items: center; gap: 9px; }
+  .check-row label { font-size: 13px; }
+  .check-row input[type=checkbox] { width: 15px; height: 15px; accent-color: #5b8cff; }
 </style>
 </head>
 <body>
@@ -102,6 +112,41 @@
       <button id="saveUrlBtn">Kaydet</button>
     </div>
     <div id="urlHint" class="save-hint"></div>
+  </div>
+
+  <div class="card">
+    <h2>Paylaşılan Ekran</h2>
+    <div class="row">
+      <select id="sourceSelect"></select>
+    </div>
+    <div class="hint-note">Bağlıyken de değiştirebilirsiniz; görüntü kesilmeden geçer.
+      Client de bu listeden seçim yapabilir.</div>
+  </div>
+
+  <div class="card">
+    <h2>Pano</h2>
+    <div class="check-row">
+      <input id="clipboardToggle" type="checkbox" />
+      <label for="clipboardToggle">Panoyu client ile karşılıklı eşitle (metin)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>TURN Sunucusu (isteğe bağlı)</h2>
+    <div class="row">
+      <input id="turnUrlInput" type="text" placeholder="turn:sizin-domaininiz.com:3478" />
+    </div>
+    <div class="row">
+      <input id="turnUserInput" type="text" placeholder="kullanıcı" />
+      <input id="turnPassInput" type="password" placeholder="parola" />
+    </div>
+    <div class="row">
+      <button id="saveTurnBtn">Kaydet</button>
+    </div>
+    <div id="turnHint" class="save-hint"></div>
+    <div class="hint-note">Mobil veri (CGNAT) gibi STUN'un yetmediği durumlarda gerekir.
+      Buraya yazdığınız bilgi bağlantı sırasında client'a otomatik iletilir —
+      client tarafında ayrıca ayar yapmanız gerekmez.</div>
   </div>
 
   <div class="card">

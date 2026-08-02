@@ -21,6 +21,21 @@ paketlenebilir).
 uygulanmadı — HWID karşılıklı tanıma zaten aynı "tek tıkla gir" deneyimini
 veriyor ve hiçbir dış servise (e-posta/SMS sağlayıcı) bağımlılık yaratmıyor.
 
+## v2.1'de eklenenler
+
+| Özellik | Nerede | Ne işe yarıyor |
+|---|---|---|
+| Yapışık tuş koruması | host + client | Fare kilidini bırakınca, pencere odağı gidince ya da bağlantı kopunca basılı tuş/butonlar **her iki tarafta** serbest bırakılır |
+| Monitör seçimi | host GUI + client paneli | Çok monitörlü PC'de hangi ekranın paylaşılacağı seçilir; bağlıyken değiştirmek görüntüyü kesmez |
+| TURN ayarı GUI'de | host GUI | CGNAT için TURN bilgisi host'ta girilir, client'a bağlantı sırasında otomatik iletilir — artık kod düzenlemek gerekmiyor |
+| Pano eşitleme | host + client | Kopyaladığınız metin iki cihaz arasında karşılıklı taşınır (kapatılabilir) |
+| Canlı istatistik | client | Çözünürlük, FPS, bit hızı, RTT, paket kaybı, jitter |
+| Tam ekran | client | Üst baradaki buton ya da F11 |
+| Genişletilmiş klavye | client | Win, Menü, PrintScreen, Pause ve `<>` tuşu eklendi (toplam 105 tuş) |
+| Blok düzeltmesi | server | nginx arkasında tüm istemciler `127.0.0.1` göründüğü için, bir cihazın 5 hatalı denemesi **herkesi** blokluyordu; artık gerçek IP (`X-Real-IP`) kullanılıyor |
+| Sağlık kontrolü | server | `GET /health` (artık gereksiz olan statik dosya sunumunun yerine) |
+| Sunucu testleri | server | `npm test` ile 10 uçtan uca protokol testi |
+
 ---
 
 ## Bileşenler
@@ -40,7 +55,15 @@ v1'den değişen tek şey yok — aynı adımlar geçerli:
 ```bash
 cd ~/GameLink/server
 npm install
+npm test         # protokol testleri (10 test, birkaç saniye sürer)
 node server.js   # test için elle çalıştırıp mesajı görün, sonra Ctrl+C
+```
+
+Sunucunun ayakta olduğunu dışarıdan kontrol etmek için basit bir uç var:
+
+```bash
+curl https://sizin-domaininiz.com/health
+# {"ok":true,"rooms":1,"uptime":38412}
 ```
 
 Nginx + certbot + systemd + firewall adımları için önceki kurulumda
@@ -79,7 +102,9 @@ npm start
 Açılan pencerede:
 1. **Parola** kutusuna bir parola girip **Kaydet**'e basın (ilk bağlantı için gerekli)
 2. **Sunucu Adresi** kutusuna `wss://sizin-domaininiz.com` yazıp **Kaydet**'e basın
-3. Üstteki nokta yeşile dönüp "Bekleniyor" yazana kadar bekleyin
+3. Birden fazla monitörünüz varsa **Paylaşılan Ekran** listesinden hangisinin
+   yayınlanacağını seçin (seçim kalıcıdır, bağlıyken de değiştirilebilir)
+4. Üstteki nokta yeşile dönüp "Bekleniyor" yazana kadar bekleyin
 
 ### 2.2 .exe olarak paketleme (portable + installer)
 
@@ -185,8 +210,22 @@ Video üzerindeki **⚙ Ayarlar** butonuna basınca açılan panelde:
 (örn. "Oyun modu + Veri Tasarrufu" mobil veride hızlı tempolu oyun için).
 Değişiklik anında, bağlantıyı koparmadan uygulanır.
 
+Aynı panelde ayrıca:
+- **Monitör** — host'un birden fazla ekranı varsa buradan seçebilirsiniz
+  (host'ta oturmanıza gerek yok, geçiş anında ve görüntü kesilmeden olur)
+- **Pano** — panonun host ile eşitlenmesini kapatıp açar
+
 **Video üstüne tıklayın** → fare kilitlenir (Pointer Lock, relative
 hareket). **ESC** ile serbest bırakılır.
+
+### 3.4 Üst bardaki diğer butonlar
+
+- **📊 İstatistik** — canlı çözünürlük, FPS, bit hızı, RTT (gecikme), paket
+  kaybı ve jitter. Hangi kalite presetinin hattınıza uyduğunu buradan
+  görebilirsiniz; RTT'nin sürekli yükselmesi bant genişliğinizin yetmediğini
+  gösterir, bir alt presete inin.
+- **⛶ Tam Ekran** — F11 ile de açılıp kapanır.
+- **Bağlantıyı Kes** — oturumu kapatıp kayıtlı bağlantılar ekranına döner.
 
 ---
 
@@ -201,6 +240,26 @@ tuşu), o tuş host tarafında **basılı takılı kalır**. Bu yüzden klavye,
 varsayılan **güvenilir** (`ordered:true`, otomatik yeniden gönderim) bir
 kanaldan gidiyor — biraz daha gecikmeli olabilir ama asla "yapışık tuş"
 olmaz.
+
+### Yapışık tuşa karşı üç katmanlı koruma
+
+Güvenilir kanal tek başına yetmiyor: tuş basılıyken **bağlantı tamamen
+koparsa** ya da ESC ile fare kilidinden çıkarsanız, tarayıcı "tuş bırakıldı"
+olayını hiç üretmez. Bu yüzden üç katman var:
+
+1. **Client** basılı tuşları/butonları kendi tarafında takip eder; fare kilidi
+   bırakıldığında, pencere odağı gittiğinde veya bağlantı kesildiğinde hepsi
+   için tek tek "bırak" gönderir.
+2. **Host**, veri kanalı kapandığında ya da `connectionState` `failed`/
+   `disconnected` olduğunda köprüye "her şeyi bırak" komutu verir — client
+   hiçbir şey gönderemeden çökse bile çalışır.
+3. **`input-bridge.ps1`** kendi bastığı tuşların listesini tutar ve hem bu
+   komutta hem de stdin kapandığında (yani Host programı kapandığında/
+   çöktüğünde) hepsini bırakır.
+
+ESC ayrıca özel bir durum: fare kilidini yerel olarak açtığı için keyup'ı
+gelmeyebilir, bu yüzden host'a **tek dokunuş** (bas-bırak) olarak gönderilir.
+Yani oyundaki menü yine açılır, tuş da takılı kalmaz.
 
 ### Kalite ayarları nasıl uygulanıyor?
 
@@ -220,29 +279,51 @@ Streaming modunda ~0.4s (daha akıcı, gecikme önemsiz).
 
 ---
 
+### Monitör değişimi neden görüntüyü kesmiyor?
+
+Yeni ekran ayrı bir `getDisplayMedia` çağrısıyla yakalanıp `RTCRtpSender.
+replaceTrack()` ile mevcut göndericiye takılıyor. SDP yeniden pazarlığı
+(renegotiation) yapılmadığı için bağlantı hiç kopmuyor; ses akışı da
+etkilenmiyor (yeni yakalamanın ses track'i kullanılmadan kapatılıyor).
+Eski video track'i `stop()` ile kapatıldığı için Windows'ta arka planda iki
+ekran birden yakalanmıyor.
+
+---
+
 ## 5) NAT/CGNAT ve TURN (gerekirse)
 
-Önceki kurulumda konuştuğumuz gibi: mobil veri genelde CGNAT arkasındadır,
-STUN bazen yetmeyebilir. Sunucunuza `coturn` kurup her iki tarafın
-(`host/renderer.js` ve `client/renderer.js`) `iceServers` listesine TURN
-bilgisini eklemeniz gerekebilir. Bu hâlâ isteğe bağlı bir adım — önce
-STUN ile deneyin.
+Mobil veri genelde CGNAT arkasındadır, STUN bazen yetmez. Bu durumda
+sunucunuza `coturn` kurup **sadece Host programındaki** "TURN Sunucusu"
+kartını doldurmanız yeterli:
+
+- **URL:** `turn:sizin-domaininiz.com:3478`
+- **kullanıcı / parola:** coturn'de tanımladığınız bilgiler
+
+Host, bu listeyi bağlantı kurulurken client'a SDP teklifiyle birlikte
+gönderir; client tarafında ayrıca bir şey ayarlamanız (ya da kod düzenlemeniz)
+gerekmez. Alanı boş bırakırsanız yalnızca STUN kullanılır. Önce STUN ile
+deneyin, bağlantı kurulamıyorsa TURN'e geçin.
 
 ---
 
 ## Test durumu
 
 - `server/server.js` (v2 protokol): gerçek bir Node.js süreci olarak
-  çalıştırılıp otomatik testlerle doğrulandı — host kaydı, join-request
-  akışı, host'un kabul/red kararı, HWID senaryosu, iki yönlü sinyal
-  aktarımı, yeni client bağlanınca eskisinin bilgilendirilmesi, zaman
-  aşımı. **Hepsi geçti.**
+  çalıştırılıp **10 otomatik testle** doğrulandı — sağlık kontrolü, host
+  kaydı, kodun ikinci kez alınamaması, bilinmeyen kod, join-request akışı,
+  host'un kabul/red kararı, iki yönlü sinyal aktarımı (TURN listesi dahil),
+  zaman aşımı, yeni client bağlanınca eskisinin bilgilendirilmesi,
+  kaba kuvvet bloğunun cihaz bazında çalışması, ayrılma bildirimleri.
+  `cd server && npm test` ile siz de çalıştırabilirsiniz. **Hepsi geçiyor.**
 - Kod üretimi (HWID→kod) ve parola hash karşılaştırma mantığı izole
   şekilde test edildi, doğru çalışıyor.
 - `host/` ve `client/` altındaki tüm `.js` dosyalarının söz dizimi
-  kontrol edildi, hatasız.
+  kontrol edildi; ayrıca arayüz eleman kimlikleri, preload API'leri ve IPC
+  kanallarının karşılıkları otomatik olarak doğrulandı (eksik referans yok).
+  Klavye haritasındaki 105 tuşun tarama kodları çakışmıyor.
 - Electron'a özgü kısımlar (GUI, `getDisplayMedia`, `SendInput` köprüsü,
-  `electron-builder` paketleme) Linux sandbox'ta çalıştırılıp uçtan uca
-  test **edilemedi** (Windows/Electron gerektiriyor) — bu akşam birlikte
-  ilk gerçek testi yapacağız. Bir hata çıkarsa konsol/log çıktısını
+  monitör değiştirme, pano eşitleme, `electron-builder` paketleme) Linux
+  sandbox'ta çalıştırılıp uçtan uca test **edilemedi** (Windows/Electron
+  gerektiriyor). `input-bridge.ps1` de PowerShell olmadığı için sadece elle
+  gözden geçirildi. İlk gerçek testte bir hata çıkarsa konsol/log çıktısını
   paylaşın, birlikte düzeltiriz.
