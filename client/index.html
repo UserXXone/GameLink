@@ -2,273 +2,157 @@
 <html lang="tr">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>GameLink</title>
 <style>
   * { box-sizing: border-box; }
   html, body {
     margin: 0; height: 100%; background: #0b0d12; color: #e6e8ee;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px;
     overflow: hidden;
   }
-  #loginScreen {
-    height: 100%; display: flex; align-items: center; justify-content: center;
+  button { cursor: pointer; border: none; font-family: inherit; }
+
+  /* ---------- Bağlantı ekranı ---------- */
+  #connectView { display: flex; height: 100%; }
+
+  .sidebar {
+    width: 280px; background: #101420; border-right: 1px solid #1c2130;
+    display: flex; flex-direction: column;
+  }
+  .sidebar-header { padding: 16px 18px; border-bottom: 1px solid #1c2130; }
+  .sidebar-header h1 { font-size: 16px; margin: 0; }
+  .conn-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .conn-item {
+    padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; cursor: pointer;
+    background: #141824; display: flex; align-items: center; gap: 8px;
+  }
+  .conn-item:hover { background: #1a2032; }
+  .conn-item .label { flex: 1; font-weight: 600; font-size: 13px; }
+  .conn-item .del { color: #7d879c; background: none; font-size: 15px; padding: 2px 6px; border-radius: 5px; }
+  .conn-item .del:hover { color: #ff6b6b; background: #2a1a20; }
+  .empty-note { color: #7d879c; font-size: 12px; padding: 14px; }
+
+  .main-form {
+    flex: 1; display: flex; align-items: center; justify-content: center;
   }
   .card {
-    background: #141824; padding: 32px 36px; border-radius: 14px;
-    width: 320px; box-shadow: 0 10px 40px rgba(0,0,0,.5);
+    background: #141824; padding: 28px 32px; border-radius: 14px; width: 320px;
   }
-  .card h1 { font-size: 20px; margin: 0 0 20px; text-align: center; letter-spacing: .5px; }
-  .card label { font-size: 12px; color: #9aa3b5; display: block; margin: 14px 0 6px; }
+  .card h2 { font-size: 16px; margin: 0 0 18px; }
+  .card label { font-size: 11px; color: #9aa3b5; display: block; margin: 12px 0 5px; text-transform: uppercase; letter-spacing: .4px; }
   .card input {
-    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3040;
-    background: #0f1219; color: #e6e8ee; font-size: 15px; letter-spacing: 1px;
+    width: 100%; padding: 10px 11px; border-radius: 8px; border: 1px solid #2a3040;
+    background: #0f1219; color: #e6e8ee; font-size: 14px;
   }
   .card input:focus { outline: none; border-color: #5b8cff; }
-  .card button {
-    width: 100%; margin-top: 22px; padding: 11px; border-radius: 8px; border: none;
-    background: #5b8cff; color: white; font-size: 15px; font-weight: 600; cursor: pointer;
+  .card button.primary {
+    width: 100%; margin-top: 20px; padding: 11px; border-radius: 8px;
+    background: #5b8cff; color: white; font-size: 14px; font-weight: 600;
   }
-  .card button:disabled { opacity: .5; cursor: default; }
-  #status { margin-top: 14px; font-size: 13px; color: #9aa3b5; text-align: center; min-height: 18px; }
-  #status.err { color: #ff6b6b; }
+  .card button.primary:disabled { opacity: .5; }
+  #connectStatus { margin-top: 12px; font-size: 12px; text-align: center; color: #9aa3b5; min-height: 16px; }
+  #connectStatus.err { color: #ff6b6b; }
 
-  #stage { display: none; height: 100%; position: relative; background: black; }
-  video {
-    width: 100%; height: 100%; object-fit: contain; cursor: none;
+  /* ---------- Video sahnesi ---------- */
+  #stageView { display: none; height: 100%; position: relative; background: black; }
+  video { width: 100%; height: 100%; object-fit: contain; cursor: none; }
+
+  #topBar {
+    position: absolute; top: 0; left: 0; right: 0; padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px; background: linear-gradient(rgba(0,0,0,.6), transparent);
+    transition: opacity .3s;
   }
+  #topBar .spacer { flex: 1; }
+  #topBar button {
+    background: rgba(20,24,36,.85); color: #e6e8ee; padding: 7px 12px; border-radius: 7px; font-size: 12px;
+  }
+  #topBar button:hover { background: rgba(40,46,64,.95); }
+  #topBar button.active { background: #5b8cff; }
   #hint {
-    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,.55); padding: 6px 14px; border-radius: 20px;
-    font-size: 12px; color: #cfd4e0; pointer-events: none; transition: opacity .3s;
+    background: rgba(0,0,0,.55); padding: 5px 12px; border-radius: 16px; font-size: 11px; color: #cfd4e0;
   }
+
+  #settingsPanel {
+    position: absolute; top: 52px; right: 16px; width: 260px; background: #141824;
+    border: 1px solid #262c3d; border-radius: 10px; padding: 14px; display: none;
+  }
+  #settingsPanel.open { display: block; }
+  #settingsPanel h3 { font-size: 11px; text-transform: uppercase; color: #7d879c; margin: 0 0 8px; }
+  .seg { display: flex; gap: 4px; margin-bottom: 14px; }
+  .seg button {
+    flex: 1; padding: 7px 4px; background: #0f1219; color: #cfd4e0; border-radius: 6px; font-size: 11px;
+  }
+  .seg button.active { background: #5b8cff; color: white; }
+  .custom-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .custom-row label { font-size: 10px; color: #9aa3b5; display: block; margin-bottom: 3px; }
+  .custom-row input { width: 100%; padding: 6px 8px; font-size: 12px; border-radius: 6px; border: 1px solid #2a3040; background: #0f1219; color: #e6e8ee; }
 </style>
 </head>
 <body>
 
-<div id="loginScreen">
-  <div class="card">
-    <h1>GameLink Bağlantısı</h1>
-    <label for="serverUrl">Sunucu adresi (wss://...)</label>
-    <input id="serverUrl" placeholder="wss://sizin-domaininiz.com" />
-    <label for="code">Kod</label>
-    <input id="code" placeholder="123456" maxlength="12" />
-    <label for="password">Parola</label>
-    <input id="password" type="password" placeholder="••••••••" />
-    <button id="connectBtn">Bağlan</button>
-    <div id="status"></div>
+<div id="connectView">
+  <div class="sidebar">
+    <div class="sidebar-header"><h1>GameLink</h1></div>
+    <div id="connList" class="conn-list"></div>
+  </div>
+  <div class="main-form">
+    <div class="card">
+      <h2 id="formTitle">Yeni Bağlantı</h2>
+      <label>Sunucu Adresi</label>
+      <input id="serverUrl" placeholder="wss://sizin-domaininiz.com" />
+      <label>Kod</label>
+      <input id="code" placeholder="A3F9-K2LX" maxlength="16" />
+      <label>Parola <span id="passwordOptionalNote" style="text-transform:none;color:#5b6270;"></span></label>
+      <input id="password" type="password" placeholder="••••••••" />
+      <button id="connectBtn" class="primary">Bağlan</button>
+      <div id="connectStatus"></div>
+    </div>
   </div>
 </div>
 
-<div id="stage">
+<div id="stageView">
   <video id="remoteVideo" autoplay playsinline></video>
-  <div id="hint">Fareyi kilitlemek için tıklayın · Çıkmak için ESC</div>
+
+  <div id="topBar">
+    <span id="hint">Fareyi kilitlemek için tıklayın · ESC ile çıkış</span>
+    <div class="spacer"></div>
+    <button id="settingsBtn">⚙ Ayarlar</button>
+    <button id="disconnectBtn">Bağlantıyı Kes</button>
+  </div>
+
+  <div id="settingsPanel">
+    <h3>Mod</h3>
+    <div class="seg" id="modeSeg">
+      <button data-mode="game" class="active">🎮 Oyun</button>
+      <button data-mode="normal">💼 Normal</button>
+      <button data-mode="stream">📺 Streaming</button>
+    </div>
+    <h3>Kalite</h3>
+    <div class="seg" id="qualitySeg">
+      <button data-quality="data-saver">🐢 Veri Tasarrufu</button>
+      <button data-quality="balanced" class="active">⚖ Dengeli</button>
+      <button data-quality="high">🚀 Yüksek</button>
+      <button data-quality="custom">⚙ Özel</button>
+    </div>
+    <div id="customControls" style="display:none;">
+      <div class="custom-row">
+        <div style="flex:1;"><label>Ölçek</label>
+          <input id="customScale" type="number" step="0.1" min="1" value="1.5" />
+        </div>
+        <div style="flex:1;"><label>FPS</label>
+          <input id="customFps" type="number" step="1" min="10" max="60" value="30" />
+        </div>
+      </div>
+      <div class="custom-row">
+        <div style="flex:1;"><label>Bitrate (Mbps)</label>
+          <input id="customBitrate" type="number" step="0.5" min="0.5" value="3" />
+        </div>
+      </div>
+      <button id="applyCustomBtn" style="width:100%;padding:8px;background:#5b8cff;color:white;border-radius:6px;font-size:12px;">Uygula</button>
+    </div>
+  </div>
 </div>
 
-<script>
-// ---- Fiziksel tuş -> PS/2 Set-1 tarama kodu (scan code) eşlemesi ----
-// [scanCode, extended]
-const KEYMAP = {
-  Escape:[0x01,false], Digit1:[0x02,false], Digit2:[0x03,false], Digit3:[0x04,false],
-  Digit4:[0x05,false], Digit5:[0x06,false], Digit6:[0x07,false], Digit7:[0x08,false],
-  Digit8:[0x09,false], Digit9:[0x0A,false], Digit0:[0x0B,false],
-  Minus:[0x0C,false], Equal:[0x0D,false], Backspace:[0x0E,false], Tab:[0x0F,false],
-  KeyQ:[0x10,false], KeyW:[0x11,false], KeyE:[0x12,false], KeyR:[0x13,false], KeyT:[0x14,false],
-  KeyY:[0x15,false], KeyU:[0x16,false], KeyI:[0x17,false], KeyO:[0x18,false], KeyP:[0x19,false],
-  BracketLeft:[0x1A,false], BracketRight:[0x1B,false], Enter:[0x1C,false], ControlLeft:[0x1D,false],
-  KeyA:[0x1E,false], KeyS:[0x1F,false], KeyD:[0x20,false], KeyF:[0x21,false], KeyG:[0x22,false],
-  KeyH:[0x23,false], KeyJ:[0x24,false], KeyK:[0x25,false], KeyL:[0x26,false],
-  Semicolon:[0x27,false], Quote:[0x28,false], Backquote:[0x29,false],
-  ShiftLeft:[0x2A,false], Backslash:[0x2B,false],
-  KeyZ:[0x2C,false], KeyX:[0x2D,false], KeyC:[0x2E,false], KeyV:[0x2F,false], KeyB:[0x30,false],
-  KeyN:[0x31,false], KeyM:[0x32,false], Comma:[0x33,false], Period:[0x34,false], Slash:[0x35,false],
-  ShiftRight:[0x36,false], NumpadMultiply:[0x37,false], AltLeft:[0x38,false], Space:[0x39,false],
-  CapsLock:[0x3A,false],
-  F1:[0x3B,false], F2:[0x3C,false], F3:[0x3D,false], F4:[0x3E,false], F5:[0x3F,false],
-  F6:[0x40,false], F7:[0x41,false], F8:[0x42,false], F9:[0x43,false], F10:[0x44,false],
-  NumLock:[0x45,false], ScrollLock:[0x46,false],
-  Numpad7:[0x47,false], Numpad8:[0x48,false], Numpad9:[0x49,false], NumpadSubtract:[0x4A,false],
-  Numpad4:[0x4B,false], Numpad5:[0x4C,false], Numpad6:[0x4D,false], NumpadAdd:[0x4E,false],
-  Numpad1:[0x4F,false], Numpad2:[0x50,false], Numpad3:[0x51,false],
-  Numpad0:[0x52,false], NumpadDecimal:[0x53,false],
-  F11:[0x57,false], F12:[0x58,false],
-  ControlRight:[0x1D,true], AltRight:[0x38,true], NumpadEnter:[0x1C,true], NumpadDivide:[0x35,true],
-  ArrowUp:[0x48,true], ArrowLeft:[0x4B,true], ArrowRight:[0x4D,true], ArrowDown:[0x50,true],
-  Insert:[0x52,true], Delete:[0x53,true], Home:[0x47,true], End:[0x4F,true],
-  PageUp:[0x49,true], PageDown:[0x51,true],
-};
-
-const $ = (id) => document.getElementById(id);
-const statusEl = $('status');
-let ws, pc, dc;
-
-function setStatus(msg, isErr) {
-  statusEl.textContent = msg || '';
-  statusEl.className = isErr ? 'err' : '';
-}
-
-async function sha256Hex(str) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function sendSignal(payload) {
-  ws.send(JSON.stringify({ type: 'signal', payload }));
-}
-
-$('connectBtn').addEventListener('click', connect);
-
-async function connect() {
-  const url = $('serverUrl').value.trim();
-  const code = $('code').value.trim();
-  const password = $('password').value;
-
-  if (!url || !code || !password) {
-    setStatus('Tüm alanları doldurun.', true);
-    return;
-  }
-
-  $('connectBtn').disabled = true;
-  setStatus('Bağlanılıyor...');
-
-  const passwordHash = await sha256Hex(password);
-
-  ws = new WebSocket(url);
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'client-join', code, passwordHash }));
-  };
-
-  ws.onmessage = async (ev) => {
-    const data = JSON.parse(ev.data);
-    switch (data.type) {
-      case 'joined':
-        setStatus('Bağlandı, video bekleniyor...');
-        setupPeerConnection();
-        break;
-      case 'error':
-        setStatus(data.message, true);
-        $('connectBtn').disabled = false;
-        break;
-      case 'signal':
-        await handleSignal(data.payload);
-        break;
-      case 'host-left':
-        setStatus('Host bağlantıyı kapattı.', true);
-        showLogin();
-        break;
-    }
-  };
-
-  ws.onerror = () => setStatus('Sunucuya bağlanılamadı.', true);
-  ws.onclose = () => { $('connectBtn').disabled = false; };
-}
-
-function setupPeerConnection() {
-  pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  });
-
-  pc.onicecandidate = (ev) => { if (ev.candidate) sendSignal({ candidate: ev.candidate }); };
-
-  pc.ontrack = (ev) => {
-    $('remoteVideo').srcObject = ev.streams[0];
-    showStage();
-  };
-
-  pc.ondatachannel = (ev) => {
-    dc = ev.channel;
-    setupInputHandlers();
-  };
-}
-
-async function handleSignal(payload) {
-  if (payload.sdp) {
-    await pc.setRemoteDescription(payload.sdp);
-    if (payload.sdp.type === 'offer') {
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      sendSignal({ sdp: answer });
-    }
-  } else if (payload.candidate) {
-    try { await pc.addIceCandidate(payload.candidate); } catch (e) { console.error(e); }
-  }
-}
-
-function showStage() {
-  $('loginScreen').style.display = 'none';
-  $('stage').style.display = 'block';
-}
-function showLogin() {
-  $('stage').style.display = 'none';
-  $('loginScreen').style.display = 'flex';
-  $('connectBtn').disabled = false;
-}
-
-// ---- Girdi yakalama (Pointer Lock ile RELATIVE fare hareketi) ----
-function setupInputHandlers() {
-  const video = $('remoteVideo');
-
-  video.addEventListener('click', () => video.requestPointerLock());
-
-  document.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement !== video) return;
-    if (e.movementX || e.movementY) {
-      send({ t: 'm', dx: e.movementX, dy: e.movementY });
-    }
-  });
-
-  const btnName = (n) => (n === 0 ? 'left' : n === 1 ? 'middle' : n === 2 ? 'right' : null);
-
-  document.addEventListener('mousedown', (e) => {
-    if (document.pointerLockElement !== video) return;
-    const b = btnName(e.button);
-    if (b) send({ t: 'b', btn: b, down: true });
-  });
-
-  document.addEventListener('mouseup', (e) => {
-    if (document.pointerLockElement !== video) return;
-    const b = btnName(e.button);
-    if (b) send({ t: 'b', btn: b, down: false });
-  });
-
-  document.addEventListener('contextmenu', (e) => {
-    if (document.pointerLockElement === video) e.preventDefault();
-  });
-
-  document.addEventListener('wheel', (e) => {
-    if (document.pointerLockElement !== video) return;
-    const delta = -Math.sign(e.deltaY) * 120;
-    send({ t: 'w', delta });
-  }, { passive: true });
-
-  document.addEventListener('keydown', (e) => {
-    if (document.pointerLockElement !== video) return;
-    const m = KEYMAP[e.code];
-    if (!m) return;
-    e.preventDefault();
-    send({ t: 'k', scan: m[0], ext: m[1], down: true });
-  });
-
-  document.addEventListener('keyup', (e) => {
-    if (document.pointerLockElement !== video) return;
-    const m = KEYMAP[e.code];
-    if (!m) return;
-    e.preventDefault();
-    send({ t: 'k', scan: m[0], ext: m[1], down: false });
-  });
-
-  document.addEventListener('pointerlockchange', () => {
-    $('hint').style.opacity = document.pointerLockElement === video ? '0' : '1';
-  });
-}
-
-function send(obj) {
-  if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj));
-}
-</script>
+<script src="renderer.js"></script>
 </body>
 </html>

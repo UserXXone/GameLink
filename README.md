@@ -1,255 +1,248 @@
-# GameLink — Açık Kaynak Kendi Uzak Oyun Erişim Sistemin
+# GameLink v2 — Kendi Uzak Oyun Erişim Sistemin
 
-Kod + parola ile, onay ekranı olmadan bağlanan, oyun için optimize edilmiş
-uzak masaüstü sistemi. WebRTC üzerinden çalışır; görüntü host↔client arasında
-**doğrudan (P2P)** akar, sunucu sadece eşleştirme (sinyalleşme) yapar.
+Kod ile bağlanan, **onay ekranı olmadan**, HWID ile birbirini tanıyan iki cihaz
+arasında çalışan, oyun için optimize edilmiş uzak masaüstü sistemi. Artık hem
+**host** hem **client** gerçek Windows programı (GUI'li, .exe olarak
+paketlenebilir).
 
-**Önceki "etrafında 20 tur dönme" sorunu neden oluyordu?**
-Fare hareketi muhtemelen *mutlak koordinat* (SetCursorPos tarzı) olarak
-gönderiliyordu. Oyunlar (FPS/TPS kamera kontrolü) fareyi RawInput/DirectInput
-ile **göreli (relative) delta** olarak okur. Bu projede client tarafında
-tarayıcının **Pointer Lock API**'si kullanılıyor (`movementX/movementY`),
-host tarafında da Win32 `SendInput` **`MOUSEEVENTF_MOVE`** (mutlak değil,
-göreli) ile enjekte ediliyor. Bu ikisi birbiriyle uyumlu olduğu için sorun
-kökünden çözülüyor.
+## v2'de neler değişti
+
+| Özellik | v1 | v2 |
+|---|---|---|
+| Client | Tarayıcıda açılan HTML sayfası | Gerçek Electron programı (GUI'li) |
+| Kimlik doğrulama | Sunucu, sabit parola hash'i kontrol ediyordu | **Host** karar veriyor: HWID tanıyorsa otomatik kabul, tanımıyorsa parola ister |
+| Tekrar bağlanma | Her seferinde kod+parola | Tanınan cihazlar **tek tıkla**, parolasız bağlanır |
+| Ses | Yok | Var (sistem sesi, WASAPI loopback) |
+| Klavye güvenilirliği | Fare ile aynı, kayıp toleranslı kanal | Ayrı, **güvenilir** kanal (tuş "yapışık kalma" riski yok) |
+| Kalite ayarı | Sabit (kodda) | Client'tan canlı değiştirilebilir: 3 mod × 4 kalite preseti |
+| Paketleme | Yok | `electron-builder` ile portable + installer .exe |
+
+**Not:** Kod içindeki e-posta/SMS doğrulama fikirleri bilinçli olarak
+uygulanmadı — HWID karşılıklı tanıma zaten aynı "tek tıkla gir" deneyimini
+veriyor ve hiçbir dış servise (e-posta/SMS sağlayıcı) bağımlılık yaratmıyor.
+
+---
 
 ## Bileşenler
 
-| Klasör    | Nerede çalışır              | Görevi |
-|-----------|------------------------------|--------|
-| `server/` | GCP Debian sunucunuz          | Kod+parola doğrulama, WebRTC eşleştirme, client sayfasını sunma |
-| `host/`   | Oyunun oynandığı Windows PC   | Ekranı yayınlar, gelen fare/klavye komutlarını Windows'a enjekte eder |
-| `client/` | Bağlanacağınız herhangi bir cihaz | Tek HTML dosyası, kurulum gerektirmez, tarayıcıda açılır |
+| Klasör | Nerede çalışır | Görevi |
+|---|---|---|
+| `server/` | GCP sunucunuz | Oda kodu ile eşleştirme, join isteklerinin host'a iletilmesi, SDP/ICE aktarımı |
+| `host/` | Oyunun oynandığı Windows PC | GUI (kod/parola/güvenilir cihazlar), ekran+ses yayını, girdi enjeksiyonu |
+| `client/` | Bağlandığınız cihaz | GUI (kayıtlı bağlantılar, mod/kalite paneli), girdi yakalama |
 
 ---
 
-## 1) Sunucu Kurulumu (Debian 13, GCP)
+## 1) Sunucu kurulumu (Debian, GCP)
 
-### 1.1 Temel paketler
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y nodejs npm nginx certbot python3-certbot-nginx git
-node -v   # v18+ öneririm; çok eskiyse NodeSource ile güncelleyin
-```
-
-Node.js çok eskiyse (Debian repo'su bazen geride kalır):
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-```
-
-### 1.2 Projeyi sunucuya kopyalayın
-
-Bu zip'i sunucunuza yükleyin (örn. `scp` ile) ve açın, ya da içeriği kendi
-git reponuza koyup `git clone` ile çekin. Sonuçta sunucuda şu yapı olmalı:
-
-```
-/home/KULLANICI/gamelink/server/server.js
-/home/KULLANICI/gamelink/client/index.html
-```
+v1'den değişen tek şey yok — aynı adımlar geçerli:
 
 ```bash
-cd ~/gamelink/server
+cd ~/GameLink/server
 npm install
-node server.js   # test amaçlı elle çalıştırıp "8080 portunda çalışıyor" mesajını görün, sonra Ctrl+C
+node server.js   # test için elle çalıştırıp mesajı görün, sonra Ctrl+C
 ```
 
-### 1.3 Alan adı (domain) — TLS için gerekli
+Nginx + certbot + systemd + firewall adımları için önceki kurulumda
+kullandığınız `nginx.conf.example` ve `gamelink.service.example` dosyaları
+aynen geçerli, tekrar etmiyorum. Sunucu zaten ayakta ve çalışıyor.
 
-Tarayıcılar `getDisplayMedia` / Pointer Lock gibi API'leri sadece **güvenli
-bağlamda (HTTPS/WSS)** çalıştırır. Bu yüzden düz `ws://IP:8080` yeterli
-olmaz, gerçek bir domain + Let's Encrypt sertifikası lazım.
-
-Ücretsiz bir domain yoksa **DuckDNS** (duckdns.org) gibi bir servisle
-sunucunuzun statik IP'sine ücretsiz bir alt alan adı (örn.
-`benim-pc.duckdns.org`) bağlayabilirsiniz. Kendi domaininiz varsa onu da
-kullanabilirsiniz — A kaydını sunucunuzun genel IP'sine yönlendirin.
-
-### 1.4 Nginx + Let's Encrypt (WSS)
-
-`server/nginx.conf.example` dosyasını referans alın:
+**Protokol notu:** Sunucu artık parola kontrolü yapmıyor — sadece host'a
+"şu HWID'li cihaz bağlanmak istiyor" bilgisini iletiyor, kararı host veriyor.
+Bu yüzden `server.js`'i güncellediyseniz (bu zip'teki v2 sürüm), sunucuyu
+yeniden başlatmanız yeterli:
 
 ```bash
-sudo cp ~/gamelink/server/nginx.conf.example /etc/nginx/sites-available/gamelink
-sudo nano /etc/nginx/sites-available/gamelink   # "sizin-domaininiz.com" kısmını değiştirin
-sudo ln -s /etc/nginx/sites-available/gamelink /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-
-sudo certbot --nginx -d sizin-domaininiz.com
+sudo systemctl restart gamelink
+sudo systemctl status gamelink
 ```
-
-Certbot sertifikayı otomatik alıp nginx config'inize işleyecek ve otomatik
-yenileme kuracaktır.
-
-### 1.5 Sunucuyu kalıcı servis olarak çalıştırın (systemd)
-
-```bash
-sudo cp ~/gamelink/server/gamelink.service.example /etc/systemd/system/gamelink.service
-sudo nano /etc/systemd/system/gamelink.service   # KULLANICI_ADINIZ'ı düzenleyin
-sudo systemctl daemon-reload
-sudo systemctl enable --now gamelink
-sudo systemctl status gamelink   # "active (running)" görmelisiniz
-```
-
-### 1.6 Güvenlik duvarı
-
-GCP konsolunda VPC firewall kuralları: 80 ve 443 portlarını (TCP) dışarıya
-açın. 8080'i **dışarıya açmayın** — nginx zaten 443'ten 127.0.0.1:8080'e
-proxy yapıyor, 8080'in doğrudan dışarıdan erişilebilir olmasına gerek yok.
-
-```bash
-sudo apt install ufw -y
-sudo ufw allow OpenSSH
-sudo ufw allow 80
-sudo ufw allow 443
-sudo ufw enable
-```
-
-Test: tarayıcıdan `https://sizin-domaininiz.com` adresine gidin, GameLink
-giriş ekranını görmelisiniz (henüz host çalışmadığı için bağlanamayacaksınız,
-bu normal).
 
 ---
 
-## 2) Host Kurulumu (oyunun oynandığı Windows bilgisayar)
+## 2) Host kurulumu (Windows, oyunun oynandığı PC)
 
-### 2.1 Gereksinimler
-
-- [Node.js](https://nodejs.org) (LTS sürüm) kurulu olmalı
-- Windows 10/11
-
-### 2.2 Kurulum
-
-`host/` klasörünü Windows makinenize kopyalayın, PowerShell veya CMD ile
-içine girin:
+### 2.1 Geliştirme/test modunda çalıştırma
 
 ```powershell
 cd host
 npm install
-copy .env.example .env
-notepad .env
-```
-
-`.env` dosyasında:
-```
-HOST_CODE=istediğiniz_bir_kod
-HOST_PASSWORD=güçlü_bir_parola
-SIGNALING_URL=wss://sizin-domaininiz.com
-```
-
-### 2.3 Çalıştırma
-
-```powershell
 npm start
 ```
 
-Terminalde `Hazır. Kod: ... — bağlantı bekleniyor.` mesajını görünce host
-hazırdır. Bu terminal penceresini açık bırakın (istersen simge durumuna
-küçültebilirsiniz).
+İlk açılışta program otomatik olarak:
+- HWID'inizden sabit bir **Bağlantı Kodu** üretir (örn. `A3F9-K2LX`)
+- `config.json` dosyasını şu konumda oluşturur:
+  `%APPDATA%\GameLink Host\config.json`
+  (Bu, portable/installer fark etmeksizin her zaman kalıcıdır — .exe'nin
+  yanına değil, Windows'un kullanıcı veri klasörüne yazılır.)
 
-**Not — Windows Defender / Güvenlik Duvarı:** İlk çalıştırmada Windows,
-Node/Electron'un ağ erişimi için izin isteyebilir; "İzin Ver" deyin.
-SmartScreen bir uyarı gösterirse "Yine de çalıştır" ile devam edin (kendi
-yazdığınız/derlediğiniz bir uygulama olduğu için imzasızdır, bu normaldir).
+Açılan pencerede:
+1. **Parola** kutusuna bir parola girip **Kaydet**'e basın (ilk bağlantı için gerekli)
+2. **Sunucu Adresi** kutusuna `wss://sizin-domaininiz.com` yazıp **Kaydet**'e basın
+3. Üstteki nokta yeşile dönüp "Bekleniyor" yazana kadar bekleyin
 
-**PowerShell çalıştırma politikası:** `main.js`, `input-bridge.ps1`'i zaten
-`-ExecutionPolicy Bypass` bayrağıyla başlattığı için sistem genelinde bir
-politika değişikliği yapmanıza gerek yok.
+### 2.2 .exe olarak paketleme (portable + installer)
 
-### 2.4 Bilgisayar açılışında otomatik başlatma (opsiyonel)
-
-Ekran yakalama, oturum açık ve etkileşimli (aktif) olmalıdır — bu yüzden
-Görev Zamanlayıcı'nın "oturum açılmamış olsa da çalıştır" seçeneği **işe
-yaramaz** (o mod masaüstü yakalayamaz). Bunun yerine:
-
-1. `Win+R` → `shell:startup` yazıp Enter'a basın
-2. Açılan klasöre, host'u başlatan bir `.bat` dosyasının kısayolunu koyun:
-   ```bat
-   @echo off
-   cd /d "C:\yol\gamelink\host"
-   npm start
-   ```
-
-Bu, siz Windows'a giriş yaptığınızda host'u otomatik başlatır.
-
----
-
-## 3) Client Kullanımı (bağlandığınız cihaz)
-
-1. Herhangi bir güncel tarayıcıda `https://sizin-domaininiz.com` adresine
-   gidin
-2. Sunucu adresini (`wss://sizin-domaininiz.com`), kodu ve parolayı girin
-3. "Bağlan"a tıklayın — host çalışıyorsa birkaç saniye içinde ekran
-   görünecektir
-4. Video üzerine **tıklayın** → fare kilitlenir (Pointer Lock), artık fare
-   hareketiniz doğrudan göreli delta olarak host'a gider (dönme sorunu yok)
-5. **ESC** tuşu fareyi serbest bırakır (tarayıcı güvenliği gereği bu
-   davranışı değiştiremiyoruz) — tekrar tıklayarak kilitleyebilirsiniz
-
----
-
-## 4) Bağlantı kurulamıyorsa (NAT/CGNAT sorunları)
-
-Bu sistem görüntüyü doğrudan P2P gönderir ve NAT arkasından çıkmak için
-STUN sunucusu kullanır (varsayılan: Google'ın herkese açık STUN'u).
-Çoğu ev ağında bu yeterlidir. Ama host veya client özellikle kısıtlayıcı
-bir ağdaysa (mobil operatör CGNAT'ı, bazı kurumsal ağlar, "symmetric NAT")
-STUN yetmeyebilir ve bir **TURN** (röle) sunucusuna ihtiyaç duyulur.
-
-Zaten bir GCP sunucunuz olduğu için üzerine kendi TURN sunucunuzu (coturn)
-kurabilirsiniz:
-
-```bash
-sudo apt install coturn -y
-# /etc/turnserver.conf içinde realm, kullanıcı/parola, external-ip ayarlayın
-sudo systemctl enable --now coturn
+```powershell
+npm run build
 ```
 
-Sonra hem `client/index.html` hem `host/renderer.js` içindeki
-`iceServers` listesine TURN sunucunuzu ekleyin:
-```js
-{ urls: 'turn:sizin-domaininiz.com:3478', username: '...', credential: '...' }
+Bu, `electron-builder`'ı çalıştırır ve `host/dist/` klasörüne şunları üretir:
+- `GameLink-Host-Portable.exe` — tek dosya, kurulum gerektirmez
+- `GameLink-Host-Kurulum.exe` — klasik Windows kurulum sihirbazı
+
+İlk çalıştırmada `npm run build` bazı ek araçları (nsis vb.) internetten
+indirecektir, birkaç dakika sürebilir.
+
+**Not — imzasız uygulama uyarısı:** Kendi derlediğiniz bu programın dijital
+imzası olmadığı için Windows Defender SmartScreen "Bilinmeyen yayımcı"
+uyarısı gösterebilir. "Diğer bilgiler" → "Yine de çalıştır" ile devam edin,
+bu normaldir.
+
+### 2.3 Güvenilir Cihazlar nasıl işler
+
+- İlk bağlantıda client doğru parolayı girerse, host o client'ın HWID'ini
+  otomatik olarak **Güvenilir Cihazlar** listesine ekler (GUI'de görünür)
+- Bir sonraki bağlantıda o cihaz **parola girmeden**, sadece kod ile
+  (client tarafında "kayıtlı bağlantı"ya tıklayarak) otomatik kabul edilir
+- İstediğiniz cihazı listeden **Kaldır** ile çıkarabilirsiniz — o andan
+  itibaren o cihaz tekrar parola girmek zorunda kalır
+
+### 2.4 Otomatik başlatma (elektrik kesintisi sonrası)
+
+BIOS "Restore on AC Power Loss" ayarınız zaten hallolduğuna göre, kalan iki
+adım:
+
+**a) Windows otomatik oturum açma:**
+```
+Win+R → netplwiz → Enter
+```
+Kullanıcınızı seçip **"Bu bilgisayarı kullanmak için kullanıcı adı ve parola
+girilmesi gerekir"** kutucuğunun işaretini kaldırın → Uygula → parolanızı
+girip onaylayın.
+
+**b) Başlangıç kısayolu:**
+```
+Win+R → shell:startup → Enter
+```
+Açılan klasöre, `npm run build` ile ürettiğiniz **portable .exe**'nin (ya da
+kurulumdan sonra oluşan kısayolun) bir kısayolunu koyun.
+
+Bu ikisi + BIOS ayarınız birlikte: elektrik gelince PC açılır → otomatik
+giriş yapar → GameLink Host otomatik başlar → kod hazır olur.
+
+---
+
+## 3) Client kurulumu (bağlandığınız cihaz)
+
+### 3.1 Geliştirme/test modunda çalıştırma
+
+```powershell
+cd client
+npm install
+npm start
 ```
 
-Bu isteğe bağlı bir gelişmiş adımdır — önce STUN ile deneyin, bağlanamazsanız
-bu yönteme geçin.
+Açılan pencerede sol tarafta **Kayıtlı Bağlantılar** (ilk seferde boş),
+sağda bağlantı formu var.
+
+**İlk bağlantı:**
+1. Sunucu Adresi: `wss://sizin-domaininiz.com`
+2. Kod: host GUI'sinde gördüğünüz kod (örn. `A3F9-K2LX`)
+3. Parola: host'ta ayarladığınız parola
+4. **Bağlan**
+
+Bağlantı başarılı olursa bu bilgi otomatik olarak **Kayıtlı Bağlantılar**'a
+eklenir — host da bu cihazın HWID'ini güvenilir listesine ekler. Bir
+sonraki seferden itibaren sadece listeden tıklamanız yeterli, parola
+istenmez.
+
+### 3.2 .exe olarak paketleme
+
+```powershell
+npm run build
+```
+
+`client/dist/` klasöründe `GameLink-Portable.exe` ve `GameLink-Kurulum.exe`
+oluşur. Aynı SmartScreen notu burada da geçerli.
+
+### 3.3 Bağlandıktan sonra: Mod ve Kalite paneli
+
+Video üzerindeki **⚙ Ayarlar** butonuna basınca açılan panelde:
+
+**Mod** (gecikme/akıcılık önceliği):
+- 🎮 **Oyun** — en düşük gecikme, kare hızı her şeyden önce korunur
+- 💼 **Normal** (Word/Aegisub gibi durağan işler) — görüntü netliği önceliklidir, düşük fps yeterlidir
+- 📺 **Streaming** (video izleme) — daha büyük tampon kullanılır, gecikme yerine akıcılık/donmama önceliklidir
+
+**Kalite** (veri/çözünürlük):
+- 🐢 Veri Tasarrufu — düşük çözünürlük+bitrate, mobil veri için
+- ⚖ Dengeli — orta seviye
+- 🚀 Yüksek — kaynak çözünürlük, yüksek bitrate (fiber/wifi için)
+- ⚙ Özel — ölçek/FPS/bitrate'i elle girin
+
+İkisi birbirinden bağımsızdır, istediğiniz kombinasyonu seçebilirsiniz
+(örn. "Oyun modu + Veri Tasarrufu" mobil veride hızlı tempolu oyun için).
+Değişiklik anında, bağlantıyı koparmadan uygulanır.
+
+**Video üstüne tıklayın** → fare kilitlenir (Pointer Lock, relative
+hareket). **ESC** ile serbest bırakılır.
 
 ---
 
-## 5) Performans / gecikme ipuçları
+## 4) Teknik notlar
 
-- `host/renderer.js` içinde `maxBitrate` (varsayılan 8 Mbps) ve
-  `frameRate` (varsayılan 60) değerlerini ağınıza göre ayarlayın
-- Aynı şehir/bölgedeki bir GCP bölgesi seçmek sinyalleşme gecikmesini
-  azaltır (görüntü zaten P2P gittiği için asıl önemli olan host↔client
-  arası fiziksel mesafe ve ağ kalitesidir)
-- Host bilgisayarınızda donanım hızlandırmalı kodlama (GPU) varsa Chromium/
-  Electron bunu otomatik kullanır
+### Klavye neden ayrı kanalda?
+
+Fare hareketi kayıp toleranslı (`ordered:false, maxRetransmits:0`) bir
+kanaldan gider — bir paket kaybolsa da sorun değil, bir sonraki delta zaten
+gelir. Ama klavye **"tuş bırakıldı"** olayı kaybolursa (örn. Forza'da gaz
+tuşu), o tuş host tarafında **basılı takılı kalır**. Bu yüzden klavye,
+varsayılan **güvenilir** (`ordered:true`, otomatik yeniden gönderim) bir
+kanaldan gidiyor — biraz daha gecikmeli olabilir ama asla "yapışık tuş"
+olmaz.
+
+### Kalite ayarları nasıl uygulanıyor?
+
+Ekran yakalama her zaman kaynak çözünürlükte/60fps'e kadar başlıyor;
+çözünürlük/fps/bitrate değişiklikleri **yeniden yakalama yapılmadan**,
+WebRTC'nin `RTCRtpSender.setParameters()` (`scaleResolutionDownBy`,
+`maxFramerate`, `maxBitrate`, `degradationPreference`) ile anında
+uygulanıyor. Bu sayede mod/kalite değiştirirken ekran hiç kesilmiyor/
+yeniden başlamıyor.
+
+### Gecikme (mod) ayarı nasıl uygulanıyor?
+
+`degradationPreference` **host**'ta (encoder) ayarlanıyor.
+`playoutDelayHint` ise **client**'ta, `RTCRtpReceiver` üzerinde
+ayarlanıyor (jitter buffer hedefi) — Oyun modunda 0 (en düşük gecikme),
+Streaming modunda ~0.4s (daha akıcı, gecikme önemsiz).
 
 ---
 
-## 6) Güvenlik notları
+## 5) NAT/CGNAT ve TURN (gerekirse)
 
-- Bu sistemi **sadece kendi cihazlarınız için** kullanın
-- `.env` dosyasını kimseyle paylaşmayın, git'e commit etmeyin
-- Güçlü bir `HOST_PASSWORD` seçin (parola sunucuya SHA-256 hash'i olarak
-  gönderilir, ayrıca WSS zaten uçtan uca şifreli taşır)
-- Sunucu 5 hatalı denemeden sonra o IP'yi 1 dakika engeller (kaba kuvvet
-  koruması) — `server/server.js` içindeki `MAX_ATTEMPTS`/`BLOCK_MS` ile
-  ayarlanabilir
+Önceki kurulumda konuştuğumuz gibi: mobil veri genelde CGNAT arkasındadır,
+STUN bazen yetmeyebilir. Sunucunuza `coturn` kurup her iki tarafın
+(`host/renderer.js` ve `client/renderer.js`) `iceServers` listesine TURN
+bilgisini eklemeniz gerekebilir. Bu hâlâ isteğe bağlı bir adım — önce
+STUN ile deneyin.
 
 ---
 
-## Test edildi
+## Test durumu
 
-`server/server.js`, gerçek bir Node.js süreci olarak çalıştırılıp otomatik
-uçtan uca testlerle doğrulandı: kayıt, yanlış parola reddi, doğru parola ile
-eşleşme, çift yönlü sinyal iletimi, statik dosya sunumu ve ayrılma
-bildirimleri — hepsi başarılı. `host/` ve `client/` tarafındaki JS
-dosyalarının söz dizimi kontrol edildi. `input-bridge.ps1` Windows'a özgü
-olduğu için (PowerShell burada mevcut değil) çalıştırılarak test edilemedi;
-mantık standart, belgelenmiş Win32 `SendInput` kalıbını izliyor. Kendi
-makinenizde ilk çalıştırmada bir sorun çıkarsa (özellikle scan code/klavye
-düzeni uyuşmazlığı gibi) bana loglarla birlikte yazın, birlikte
-düzeltelim.   İletişim: mehmetozkal12@gmail.com
+- `server/server.js` (v2 protokol): gerçek bir Node.js süreci olarak
+  çalıştırılıp otomatik testlerle doğrulandı — host kaydı, join-request
+  akışı, host'un kabul/red kararı, HWID senaryosu, iki yönlü sinyal
+  aktarımı, yeni client bağlanınca eskisinin bilgilendirilmesi, zaman
+  aşımı. **Hepsi geçti.**
+- Kod üretimi (HWID→kod) ve parola hash karşılaştırma mantığı izole
+  şekilde test edildi, doğru çalışıyor.
+- `host/` ve `client/` altındaki tüm `.js` dosyalarının söz dizimi
+  kontrol edildi, hatasız.
+- Electron'a özgü kısımlar (GUI, `getDisplayMedia`, `SendInput` köprüsü,
+  `electron-builder` paketleme) Linux sandbox'ta çalıştırılıp uçtan uca
+  test **edilemedi** (Windows/Electron gerektiriyor) — bu akşam birlikte
+  ilk gerçek testi yapacağız. Bir hata çıkarsa konsol/log çıktısını
+  paylaşın, birlikte düzeltiriz.

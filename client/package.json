@@ -1,5 +1,5 @@
 {
-  "name": "gamelink-host",
+  "name": "gamelink-client",
   "version": "2.0.0",
   "private": true,
   "main": "main.js",
@@ -15,8 +15,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.gamelink.host",
-    "productName": "GameLink Host",
+    "appId": "com.gamelink.client",
+    "productName": "GameLink",
     "files": [
       "**/*",
       "!node_modules/electron-builder${/*}"
@@ -28,12 +28,12 @@
       ]
     },
     "portable": {
-      "artifactName": "GameLink-Host-Portable.exe"
+      "artifactName": "GameLink-Portable.exe"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallDir": true,
-      "artifactName": "GameLink-Host-Kurulum.exe"
+      "artifactName": "GameLink-Kurulum.exe"
     }
   }
 }

@@ -1,16 +1,21 @@
-// GameLink - Sinyalleşme Sunucusu
-// Bu sunucu SADECE eşleştirme (SDP/ICE değişimi) yapar.
-// Görüntü (video) verisi buradan geçmez, host<->client arasında doğrudan (P2P) akar.
+// GameLink - Sinyalleşme Sunucusu v2
+// Parola/HWID doğrulaması artık HOST tarafında yapılıyor (güvenilir cihaz listesi
+// host'un kendi config.json'unda tutuluyor). Bu sunucu sadece:
+//   1) host<->client eşleştirmesini (oda kodu ile)
+//   2) join isteklerinin host'a iletilmesini / host'un kabul-red kararının client'a iletilmesini
+//   3) kabul edilen çiftler arasında SDP/ICE (signal) aktarımını
+// yapar. Video verisi buradan hiç geçmez (P2P).
 
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
+const JOIN_TIMEOUT_MS = 12_000;
 
-// ---- Basit statik dosya sunucusu (client/index.html'i servis eder) ----
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -20,25 +25,23 @@ const MIME = {
 const server = http.createServer((req, res) => {
   let filePath = req.url === '/' ? '/index.html' : req.url;
   filePath = path.join(CLIENT_DIR, path.normalize(filePath).replace(/^(\.\.[\/\\])+/, ''));
-
   fs.readFile(filePath, (err, data) => {
     if (err) {
       res.writeHead(404);
       res.end('Not found');
       return;
     }
-    const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
     res.end(data);
   });
 });
 
 const wss = new WebSocket.Server({ server });
 
-// code -> { hostWs, passwordHash, clientWs }
+// code -> { hostWs, pending: Map(clientId -> {ws, ip, timeout}), activeClientWs, activeClientId }
 const rooms = new Map();
 
-// Basit kaba kuvvet (brute-force) koruması
+// Kaba kuvvet / spam koruması (host'un reddettiği veya zaman aşımına uğrayan denemeler dahil)
 const attempts = new Map(); // ip -> { count, blockedUntil }
 const MAX_ATTEMPTS = 5;
 const BLOCK_MS = 60_000;
@@ -47,7 +50,6 @@ function isBlocked(ip) {
   const a = attempts.get(ip);
   return !!(a && a.blockedUntil && Date.now() < a.blockedUntil);
 }
-
 function registerFail(ip) {
   const a = attempts.get(ip) || { count: 0, blockedUntil: 0 };
   a.count += 1;
@@ -57,13 +59,14 @@ function registerFail(ip) {
   }
   attempts.set(ip, a);
 }
-
 function registerSuccess(ip) {
   attempts.delete(ip);
 }
-
 function send(ws, obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+function genId() {
+  return crypto.randomBytes(8).toString('hex');
 }
 
 wss.on('connection', (ws, req) => {
@@ -76,19 +79,20 @@ wss.on('connection', (ws, req) => {
     try {
       data = JSON.parse(raw);
     } catch {
-      return; // geçersiz JSON'u sessizce yoksay
+      return;
     }
 
     switch (data.type) {
+      // ---- Host kendini bir koda kaydeder ----
       case 'host-register': {
-        const { code, passwordHash } = data;
-        if (!code || !passwordHash) return;
+        const { code } = data;
+        if (!code) return;
         const existing = rooms.get(code);
         if (existing && existing.hostWs && existing.hostWs.readyState === WebSocket.OPEN) {
           send(ws, { type: 'error', message: 'Bu kod zaten kullanımda.' });
           return;
         }
-        rooms.set(code, { hostWs: ws, passwordHash, clientWs: null });
+        rooms.set(code, { hostWs: ws, pending: new Map(), activeClientWs: null, activeClientId: null });
         ws.role = 'host';
         ws.code = code;
         console.log(`[HOST] kayıt oldu: ${code}`);
@@ -96,41 +100,80 @@ wss.on('connection', (ws, req) => {
         break;
       }
 
+      // ---- Client bir koda bağlanmak ister; host'a onay için iletilir ----
       case 'client-join': {
         if (isBlocked(ip)) {
           send(ws, { type: 'error', message: 'Çok fazla hatalı deneme. Biraz bekleyin.' });
           return;
         }
-        const { code, passwordHash } = data;
+        const { code, hwid, deviceName, passwordHash } = data;
         const room = rooms.get(code);
         if (!room || !room.hostWs || room.hostWs.readyState !== WebSocket.OPEN) {
           registerFail(ip);
           send(ws, { type: 'error', message: 'Kod bulunamadı ya da host çevrimdışı.' });
           return;
         }
-        if (room.passwordHash !== passwordHash) {
-          registerFail(ip);
-          send(ws, { type: 'error', message: 'Parola hatalı.' });
-          return;
-        }
-        if (room.clientWs && room.clientWs.readyState === WebSocket.OPEN) {
-          send(ws, { type: 'error', message: 'Bu host zaten başka bir client ile bağlı.' });
-          return;
-        }
-        registerSuccess(ip);
-        room.clientWs = ws;
+
+        const clientId = genId();
         ws.role = 'client';
         ws.code = code;
-        console.log(`[CLIENT] bağlandı: ${code}`);
-        send(ws, { type: 'joined' });
-        send(room.hostWs, { type: 'client-joined' });
+        ws.clientId = clientId;
+
+        const timeout = setTimeout(() => {
+          if (room.pending.has(clientId)) {
+            room.pending.delete(clientId);
+            registerFail(ip);
+            send(ws, { type: 'error', message: 'Host yanıt vermedi (zaman aşımı).' });
+          }
+        }, JOIN_TIMEOUT_MS);
+
+        room.pending.set(clientId, { ws, ip, timeout });
+        send(room.hostWs, {
+          type: 'join-request',
+          clientId,
+          hwid: hwid || null,
+          deviceName: deviceName || 'Bilinmeyen cihaz',
+          passwordHash: passwordHash || null,
+        });
         break;
       }
 
+      // ---- Host, bekleyen bir isteği kabul/red eder ----
+      case 'join-decision': {
+        if (ws.role !== 'host') return;
+        const room = rooms.get(ws.code);
+        if (!room) return;
+        const { clientId, accept, reason } = data;
+        const pendingEntry = room.pending.get(clientId);
+        if (!pendingEntry) return; // zaman aşımına uğramış ya da zaten işlenmiş
+
+        clearTimeout(pendingEntry.timeout);
+        room.pending.delete(clientId);
+
+        if (!accept) {
+          registerFail(pendingEntry.ip);
+          send(pendingEntry.ws, { type: 'error', message: reason || 'Bağlantı reddedildi.' });
+          return;
+        }
+
+        registerSuccess(pendingEntry.ip);
+
+        if (room.activeClientWs && room.activeClientWs.readyState === WebSocket.OPEN) {
+          send(room.activeClientWs, { type: 'error', message: 'Başka bir cihaz bağlandı.' });
+        }
+
+        room.activeClientWs = pendingEntry.ws;
+        room.activeClientId = clientId;
+        send(pendingEntry.ws, { type: 'joined' });
+        console.log(`[CLIENT] eşleşti: ${ws.code} (${clientId})`);
+        break;
+      }
+
+      // ---- SDP/ICE aktarımı (yalnızca aktif çift arasında) ----
       case 'signal': {
         const room = rooms.get(ws.code);
         if (!room) return;
-        const target = ws.role === 'host' ? room.clientWs : room.hostWs;
+        const target = ws.role === 'host' ? room.activeClientWs : room.hostWs;
         send(target, { type: 'signal', payload: data.payload });
         break;
       }
@@ -146,18 +189,28 @@ wss.on('connection', (ws, req) => {
     if (!room) return;
 
     if (ws.role === 'host') {
-      send(room.clientWs, { type: 'host-left' });
+      send(room.activeClientWs, { type: 'host-left' });
+      for (const entry of room.pending.values()) {
+        clearTimeout(entry.timeout);
+        send(entry.ws, { type: 'error', message: 'Host bağlantıyı kapattı.' });
+      }
       rooms.delete(ws.code);
       console.log(`[HOST] ayrıldı: ${ws.code}`);
     } else if (ws.role === 'client') {
-      room.clientWs = null;
-      send(room.hostWs, { type: 'client-left' });
+      if (room.pending.has(ws.clientId)) {
+        clearTimeout(room.pending.get(ws.clientId).timeout);
+        room.pending.delete(ws.clientId);
+      }
+      if (room.activeClientWs === ws) {
+        room.activeClientWs = null;
+        room.activeClientId = null;
+        send(room.hostWs, { type: 'client-left' });
+      }
       console.log(`[CLIENT] ayrıldı: ${ws.code}`);
     }
   });
 });
 
-// Ölü bağlantıları periyodik temizle (30 sn)
 const keepAliveInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
@@ -165,7 +218,6 @@ const keepAliveInterval = setInterval(() => {
     ws.ping();
   });
 }, 30000);
-
 wss.on('close', () => clearInterval(keepAliveInterval));
 
 server.listen(PORT, () => {
