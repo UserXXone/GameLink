@@ -37,6 +37,9 @@ async function refreshConfigUI(cfg) {
   $('turnUserInput').value = cfg.turn.username || '';
   $('turnPassInput').value = cfg.turn.credential || '';
   $('clipboardToggle').checked = !!cfg.clipboardSync;
+  $('trayToggle').checked = cfg.minimizeToTray !== false;
+  $('iceModeSelect').value = cfg.iceMode || 'auto';
+  updateIceModeWarning(cfg);
   renderDeviceList(cfg.trustedDevices);
 }
 
@@ -142,6 +145,36 @@ $('saveTurnBtn').addEventListener('click', async () => {
     ? 'Kaydedildi. Bir sonraki bağlantıda geçerli olur.'
     : 'TURN kapatıldı (sadece STUN kullanılacak).';
   setTimeout(() => ($('turnHint').textContent = ''), 3500);
+});
+
+// TURN tanımlı değilken "sadece TURN" seçmek işe yaramaz; kullanıcıyı uyar.
+function updateIceModeWarning(cfg) {
+  const mode = cfg.iceMode || 'auto';
+  const hasTurn = !!(cfg.turn && cfg.turn.url);
+  const el = $('iceModeHint');
+  if (mode === 'turn-only' && !hasTurn) {
+    el.textContent = 'Uyarı: TURN sunucusu tanımlı değil, bu mod uygulanamaz.';
+    el.style.color = '#ff9f6b';
+  } else {
+    el.textContent = '';
+    el.style.color = '';
+  }
+}
+
+$('iceModeSelect').addEventListener('change', async () => {
+  const updated = await window.hostAPI.saveSettings({ iceMode: $('iceModeSelect').value });
+  await refreshConfigUI(updated);
+  const labels = {
+    'auto': 'Otomatik (STUN + TURN)',
+    'stun-only': 'Sadece STUN',
+    'turn-only': 'Sadece TURN (röle)',
+  };
+  log(`Bağlantı modu: ${labels[updated.iceMode]}. Sonraki bağlantıda geçerli olur.`);
+});
+
+$('trayToggle').addEventListener('change', async () => {
+  const updated = await window.hostAPI.saveSettings({ minimizeToTray: $('trayToggle').checked });
+  await refreshConfigUI(updated);
 });
 
 $('clipboardToggle').addEventListener('change', async () => {
@@ -252,7 +285,12 @@ async function captureScreen() {
 async function startPeerConnection() {
   closePeerConnection();
 
-  pc = new RTCPeerConnection({ iceServers: config.iceServers });
+  // "Sadece TURN" modunda iceTransportPolicy 'relay' olur: doğrudan (host/srflx)
+  // adaylar hiç denenmez, tüm trafik röle üzerinden gider.
+  pc = new RTCPeerConnection({
+    iceServers: config.iceServers,
+    iceTransportPolicy: config.iceTransportPolicy || 'all',
+  });
 
   pc.onicecandidate = (ev) => { if (ev.candidate) sendSignal({ candidate: ev.candidate }); };
   pc.onconnectionstatechange = () => {
@@ -285,7 +323,13 @@ async function startPeerConnection() {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   // ICE sunucu listesi offer ile birlikte gider: client, TURN bilgisini host'tan öğrenir.
-  sendSignal({ sdp: offer, iceServers: config.iceServers });
+  // ICE sunucu listesi ve transport politikası offer ile birlikte gider:
+  // client TURN bilgisini ve seçilen modu host'tan öğrenir.
+  sendSignal({
+    sdp: offer,
+    iceServers: config.iceServers,
+    iceTransportPolicy: config.iceTransportPolicy || 'all',
+  });
 
   // Varsayılan: "Dengeli" preset + "Oyun" modu ayarları
   applySettings({

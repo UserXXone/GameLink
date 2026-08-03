@@ -132,6 +132,32 @@
   </div>
 
   <div class="card">
+    <h2>Pencere</h2>
+    <div class="check-row">
+      <input id="trayToggle" type="checkbox" />
+      <label for="trayToggle">Küçültünce sistem tepsisine in (görev çubuğunda durmasın)</label>
+    </div>
+    <div class="hint-note">Kapatma düğmesi de programı sonlandırmaz, tepsiye indirir —
+      böylece uzaktan bağlantı hep açık kalır. Tamamen çıkmak için tepsi
+      simgesine sağ tıklayıp Çıkış deyin.</div>
+  </div>
+
+  <div class="card">
+    <h2>Bağlantı Modu</h2>
+    <select id="iceModeSelect">
+      <option value="auto">Otomatik (önce doğrudan, olmazsa TURN)</option>
+      <option value="stun-only">Sadece STUN (yalnızca doğrudan bağlantı)</option>
+      <option value="turn-only">Sadece TURN (her şey röle üzerinden)</option>
+    </select>
+    <div id="iceModeHint" class="save-hint"></div>
+    <div class="hint-note">
+      <b>Otomatik:</b> en iyi seçenek — doğrudan bağlanmayı dener, başaramazsa TURN'e düşer.<br />
+      <b>Sadece STUN:</b> TURN hiç kullanılmaz. En düşük gecikme, ama CGNAT'li ağlarda (mobil veri) bağlanamayabilir.<br />
+      <b>Sadece TURN:</b> tüm trafik röle üzerinden gider. Daha tutarlı ama sunucunuzun bant genişliğini kullanır.
+    </div>
+  </div>
+
+  <div class="card">
     <h2>TURN Sunucusu (isteğe bağlı)</h2>
     <div class="row">
       <input id="turnUrlInput" type="text" placeholder="turn:sizin-domaininiz.com:3478" />

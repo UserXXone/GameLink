@@ -70,7 +70,13 @@
   #topBar button.active { background: #5b8cff; }
   #hint {
     background: rgba(0,0,0,.55); padding: 5px 12px; border-radius: 16px; font-size: 11px; color: #cfd4e0;
+    transition: opacity .4s;
   }
+
+  /* Otomatik gizlenme: üst çubuk ve ipucu kaybolur, ayarlar paneli açıksa o kalır. */
+  body.ui-hidden #topBar { opacity: 0; pointer-events: none; }
+  body.ui-hidden #hint { opacity: 0; }
+  body.ui-hidden #settingsPanel.open { opacity: 1; }
 
   #settingsPanel {
     position: absolute; top: 52px; right: 16px; width: 260px; background: #141824;
@@ -133,7 +139,7 @@
   <video id="remoteVideo" autoplay playsinline></video>
 
   <div id="topBar">
-    <span id="hint">Fareyi kilitlemek için tıklayın · ESC ile çıkış · F11 tam ekran</span>
+    <span id="hint">Yakalamak için tıklayın · <b id="hintHotkey">Sol Ctrl + Sol Alt</b> ile çıkış · F11 tam ekran</span>
     <span id="statsInfo"></span>
     <div class="spacer"></div>
     <button id="statsBtn">📊 İstatistik</button>
@@ -184,6 +190,23 @@
     <div class="toggle-row">
       <input id="clipboardToggle" type="checkbox" checked />
       <label for="clipboardToggle">Panoyu host ile eşitle</label>
+    </div>
+
+    <h3 style="margin-top:14px;">Yakalamadan Çıkış</h3>
+    <select id="releaseHotkeySelect"></select>
+    <div style="font-size:10px;color:#7d879c;margin-top:5px;line-height:1.4;">
+      Escape artık host'a iletiliyor (oyun menüleri için). Yakalamadan çıkmak için
+      yukarıdaki kısayolu kullanın.
+    </div>
+
+    <h3 style="margin-top:14px;">Arayüz</h3>
+    <div class="toggle-row">
+      <input id="autoHideToggle" type="checkbox" checked />
+      <label for="autoHideToggle">Butonları 5 sn sonra gizle</label>
+    </div>
+    <div class="toggle-row">
+      <input id="hideUiToggle" type="checkbox" />
+      <label for="hideUiToggle">Butonları tamamen gizle</label>
     </div>
   </div>
 </div>

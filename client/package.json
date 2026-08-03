@@ -1,6 +1,6 @@
 {
   "name": "gamelink-client",
-  "version": "2.0.0",
+  "version": "2.5.0",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -23,8 +23,18 @@
     ],
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "portable": {
@@ -32,7 +42,7 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallDir": true,
+      "allowToChangeInstallationDirectory": true,
       "artifactName": "GameLink-Kurulum.exe"
     }
   }

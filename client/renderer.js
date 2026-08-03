@@ -33,20 +33,32 @@ const KEYMAP = {
   PrintScreen:[0x37,true], Pause:[0x45,true],
 };
 
-// Bu tuşlar host'a "basılı tutma" olarak gitmez: ESC yerel olarak fare kilidini
-// açtığı için tarayıcı keyup'ı vermeyebilir, o yüzden tek dokunuş olarak gönderilir.
-const TAP_ONLY = new Set(['Escape']);
-
 // ---- Kalite / mod tanımları ----
 const QUALITY_PRESETS = {
   'data-saver': { scaleResolutionDownBy: 2,   maxFramerate: 30, maxBitrate: 1_500_000 },
   'balanced':   { scaleResolutionDownBy: 1.5, maxFramerate: 30, maxBitrate: 3_000_000 },
   'high':       { scaleResolutionDownBy: 1,   maxFramerate: 60, maxBitrate: 8_000_000 },
 };
+// Her modun kendi önerdiği kalite profili var: mod değişince kalite de otomatik
+// oraya geçer (kullanıcı isterse sonrasında kaliteyi elle değiştirebilir).
 const MODE_PRESETS = {
-  game:   { degradationPreference: 'maintain-framerate', playoutDelayHint: 0 },
-  normal: { degradationPreference: 'maintain-resolution', playoutDelayHint: 0.1 },
-  stream: { degradationPreference: 'balanced',            playoutDelayHint: 0.4 },
+  game:   { degradationPreference: 'maintain-framerate', playoutDelayHint: 0,   quality: 'balanced' },
+  normal: { degradationPreference: 'maintain-resolution', playoutDelayHint: 0.1, quality: 'high' },
+  stream: { degradationPreference: 'balanced',            playoutDelayHint: 0.4, quality: 'high' },
+};
+
+// ---- Yakalamadan çıkış kısayolu seçenekleri ----
+// Escape artık host'a iletiliyor (oyunlarda menü açmak için gerekli), bu yüzden
+// çıkış için ayrı bir kombinasyon kullanılıyor.
+const RELEASE_HOTKEYS = {
+  'CtrlLeft+AltLeft':      { label: 'Sol Ctrl + Sol Alt', keys: ['ControlLeft', 'AltLeft'] },
+  'CtrlLeft+ShiftLeft':    { label: 'Sol Ctrl + Sol Shift', keys: ['ControlLeft', 'ShiftLeft'] },
+  'AltLeft+ShiftLeft':     { label: 'Sol Alt + Sol Shift', keys: ['AltLeft', 'ShiftLeft'] },
+  'F12':                   { label: 'F12', keys: ['F12'] },
+  'Numpad0':               { label: 'Numpad 0', keys: ['Numpad0'] },
+  'NumpadMultiply':        { label: 'Numpad *', keys: ['NumpadMultiply'] },
+  'ScrollLock':            { label: 'Scroll Lock', keys: ['ScrollLock'] },
+  'MouseMiddle':           { label: 'Fare Orta Tuş (basılı tut)', keys: [], mouseButton: 1 },
 };
 
 const DEFAULT_ICE = [
@@ -71,6 +83,20 @@ let clipboardSync = true;
 const pressedKeys = new Map(); // e.code -> [scan, ext]
 const pressedButtons = new Set();
 
+// Yakalamadan çıkış kısayolunu tespit etmek için o an fiziksel olarak basılı olan
+// tuşlar (host'a gönderilenlerden ayrı tutuluyor).
+const physicallyDown = new Set();
+
+let prefs = {
+  releaseHotkey: 'CtrlLeft+AltLeft',
+  autoHideUi: true,
+  hideUiCompletely: false,
+  mode: 'game',
+  quality: 'balanced',
+};
+let uiHideTimer = null;
+let keyboardLockActive = false;
+
 // ---------------- Başlangıç ----------------
 
 async function init() {
@@ -78,6 +104,18 @@ async function init() {
   hwid = data.hwid;
   deviceName = data.deviceName;
   renderConnList(data.savedConnections);
+
+  prefs = await window.clientAPI.getPrefs();
+  $('autoHideToggle').checked = prefs.autoHideUi;
+  $('hideUiToggle').checked = prefs.hideUiCompletely;
+  populateHotkeySelect();
+
+  // Kaydedilmiş mod/kalite geri yüklenir (henüz bağlantı yok, host'a gönderme).
+  currentMode = prefs.mode || 'game';
+  currentQuality = prefs.quality || 'balanced';
+  highlightSeg('#modeSeg', 'mode', currentMode);
+  highlightSeg('#qualitySeg', 'quality', currentQuality);
+  $('customControls').style.display = currentQuality === 'custom' ? 'block' : 'none';
 }
 
 function renderConnList(list) {
@@ -196,10 +234,15 @@ function handleJoinError(message) {
 
 // Peer connection, host'un offer'ı ile birlikte gönderdiği ICE sunucu listesi
 // kullanılarak kurulur; TURN ayarı sadece host'ta tutulur.
-function ensurePeerConnection(iceServers) {
+function ensurePeerConnection(iceServers, transportPolicy) {
   if (pc) return;
 
-  pc = new RTCPeerConnection({ iceServers: iceServers && iceServers.length ? iceServers : DEFAULT_ICE });
+  // Host "Sadece TURN" modundaysa transportPolicy 'relay' gelir ve doğrudan
+  // adaylar hiç toplanmaz; iki taraf da aynı politikayı kullanmalı.
+  pc = new RTCPeerConnection({
+    iceServers: iceServers && iceServers.length ? iceServers : DEFAULT_ICE,
+    iceTransportPolicy: transportPolicy === 'relay' ? 'relay' : 'all',
+  });
 
   pc.onicecandidate = (ev) => { if (ev.candidate) sendSignal({ candidate: ev.candidate }); };
 
@@ -248,7 +291,7 @@ function sendSignal(payload) {
 
 async function handleSignal(payload) {
   if (payload.sdp) {
-    ensurePeerConnection(payload.iceServers);
+    ensurePeerConnection(payload.iceServers, payload.iceTransportPolicy);
     await pc.setRemoteDescription(payload.sdp);
     remoteDescriptionSet = true;
     if (payload.sdp.type === 'offer') {
@@ -301,7 +344,9 @@ function closeConnection() {
   stopStats();
   stopClipboardSync();
   releaseAllInputs();
-  if (document.pointerLockElement) document.exitPointerLock();
+  stopCapture();
+  clearTimeout(uiHideTimer);
+  document.body.classList.remove('ui-hidden');
   if (mouseDc) { mouseDc.close(); mouseDc = null; }
   if (keysDc) { keysDc.close(); keysDc = null; }
   if (controlDc) { controlDc.close(); controlDc = null; }
@@ -315,7 +360,48 @@ function closeConnection() {
 // ---------------- Girdi yakalama (Pointer Lock ile RELATIVE fare) ----------------
 
 const video = $('remoteVideo');
-video.addEventListener('click', () => video.requestPointerLock());
+video.addEventListener('click', () => startCapture());
+
+// Windows tuşu, Alt+Tab, Escape gibi tuşlar normalde işletim sistemi tarafından
+// yakalanır ve uygulamaya hiç ulaşmaz — bu yüzden başlat menüsü yerel makinede
+// açılıyordu. Keyboard Lock API bu tuşları uygulamaya yönlendirir, ama yalnızca
+// tam ekran modunda çalışır. Bu yüzden yakalama = tam ekran + pointer lock +
+// keyboard lock üçlüsü olarak başlatılıyor.
+async function startCapture() {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch { /* tam ekran reddedilirse yine de devam et */ }
+
+  try {
+    if (navigator.keyboard && navigator.keyboard.lock) {
+      await navigator.keyboard.lock();
+      keyboardLockActive = true;
+    }
+  } catch { keyboardLockActive = false; }
+
+  try {
+    await video.requestPointerLock();
+  } catch { /* kullanıcı hızlı çıkış yaptıysa sessizce geç */ }
+}
+
+function stopCapture() {
+  if (document.pointerLockElement) document.exitPointerLock();
+  if (keyboardLockActive && navigator.keyboard && navigator.keyboard.unlock) {
+    try { navigator.keyboard.unlock(); } catch { /* yoksay */ }
+    keyboardLockActive = false;
+  }
+  physicallyDown.clear();
+  showUi();
+}
+
+// Seçili kısayolun tamamı basılı mı?
+function isReleaseHotkeyPressed() {
+  const hk = RELEASE_HOTKEYS[prefs.releaseHotkey];
+  if (!hk || !hk.keys.length) return false;
+  return hk.keys.every((k) => physicallyDown.has(k));
+}
 
 document.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== video) return;
@@ -326,6 +412,16 @@ const btnName = (n) => (n === 0 ? 'left' : n === 1 ? 'middle' : n === 2 ? 'right
 
 document.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== video) return;
+
+  // Fare tuşu çıkış kısayolu olarak seçilmişse host'a gönderilmez.
+  const hk = RELEASE_HOTKEYS[prefs.releaseHotkey];
+  if (hk && hk.mouseButton != null && e.button === hk.mouseButton) {
+    e.preventDefault();
+    releaseAllInputs();
+    stopCapture();
+    return;
+  }
+
   const b = btnName(e.button);
   if (!b) return;
   pressedButtons.add(b);
@@ -348,29 +444,37 @@ document.addEventListener('wheel', (e) => {
 }, { passive: true });
 
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'F11' && document.pointerLockElement !== video) {
-    e.preventDefault();
-    toggleFullscreen();
+  const captured = document.pointerLockElement === video;
+
+  if (!captured) {
+    if (e.code === 'F11') {
+      e.preventDefault();
+      toggleFullscreen();
+    }
     return;
   }
-  if (document.pointerLockElement !== video) return;
+
+  physicallyDown.add(e.code);
+
+  // Yakalamadan çıkış kısayolu: host'a gönderilmez, yerel olarak kilidi açar.
+  if (isReleaseHotkeyPressed()) {
+    e.preventDefault();
+    releaseAllInputs();
+    stopCapture();
+    return;
+  }
+
   const m = KEYMAP[e.code];
   if (!m) return;
   e.preventDefault();
-  if (e.repeat) return; // tekrar eden keydown'ları göndermeye gerek yok, host tuşu basılı tutuyor
-
-  if (TAP_ONLY.has(e.code)) {
-    // ESC fare kilidini açtığı için keyup gelmeyebilir: tek dokunuş olarak gönder.
-    sendKey({ t: 'k', scan: m[0], ext: m[1], down: true });
-    sendKey({ t: 'k', scan: m[0], ext: m[1], down: false });
-    return;
-  }
+  if (e.repeat) return; // host tuşu zaten basılı tutuyor
 
   pressedKeys.set(e.code, m);
   sendKey({ t: 'k', scan: m[0], ext: m[1], down: true });
 });
 
 document.addEventListener('keyup', (e) => {
+  physicallyDown.delete(e.code);
   const m = KEYMAP[e.code];
   if (!m) return;
   if (!pressedKeys.has(e.code)) return;
@@ -382,7 +486,46 @@ document.addEventListener('keyup', (e) => {
 // Fare kilidi bırakıldığında (ESC) ya da pencere odağı kaybedildiğinde, o an basılı
 // olan her şeyi host'ta serbest bırak. Aksi halde örneğin gaz tuşu basılı takılır.
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== video) releaseAllInputs();
+  if (document.pointerLockElement === video) {
+    scheduleUiHide();       // yakalandı: ipuçları/butonlar 5sn sonra kaybolsun
+  } else {
+    releaseAllInputs();
+    physicallyDown.clear();
+    showUi();               // yakalama bırakıldı: arayüz geri gelsin
+    scheduleUiHide();       // ama hareketsiz kalırsa yine 5sn sonra gizlensin
+  }
+});
+
+// ---------------- Arayüzün otomatik gizlenmesi ----------------
+
+function showUi() {
+  if (prefs.hideUiCompletely) {
+    document.body.classList.add('ui-hidden');
+    return;
+  }
+  document.body.classList.remove('ui-hidden');
+}
+
+function scheduleUiHide() {
+  clearTimeout(uiHideTimer);
+  if (!prefs.autoHideUi) return;
+  uiHideTimer = setTimeout(() => {
+    // Ayarlar paneli açıkken gizleme, kullanıcı orayla uğraşıyor olabilir.
+    if ($('settingsPanel').classList.contains('open')) {
+      scheduleUiHide();
+      return;
+    }
+    document.body.classList.add('ui-hidden');
+  }, 5000);
+}
+
+// Fare hareket ederse (yakalama yokken) arayüzü geri getir.
+document.addEventListener('mousemove', () => {
+  if (document.pointerLockElement === video) return;
+  if (!prefs.hideUiCompletely) {
+    document.body.classList.remove('ui-hidden');
+    scheduleUiHide();
+  }
 });
 window.addEventListener('blur', releaseAllInputs);
 window.addEventListener('beforeunload', closeConnection);
@@ -554,24 +697,78 @@ $('settingsBtn').addEventListener('click', () => {
   $('settingsPanel').classList.toggle('open');
 });
 
-document.querySelectorAll('#modeSeg button').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#modeSeg button').forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentMode = btn.dataset.mode;
-    applyModeLocally(currentMode);
-    sendCurrentSettings();
+function highlightSeg(selector, dataKey, value) {
+  document.querySelectorAll(selector + ' button').forEach((b) => {
+    b.classList.toggle('active', b.dataset[dataKey] === value);
   });
+}
+
+function setQuality(quality, send = true) {
+  currentQuality = quality;
+  highlightSeg('#qualitySeg', 'quality', quality);
+  $('customControls').style.display = quality === 'custom' ? 'block' : 'none';
+  window.clientAPI.savePrefs({ quality });
+  if (send && quality !== 'custom') sendCurrentSettings();
+}
+
+function setMode(mode, send = true) {
+  currentMode = mode;
+  highlightSeg('#modeSeg', 'mode', mode);
+  applyModeLocally(mode);
+  window.clientAPI.savePrefs({ mode });
+  // Mod, kendi önerdiği kalite profilini de getirir.
+  const suggested = MODE_PRESETS[mode].quality;
+  if (suggested && currentQuality !== 'custom') {
+    setQuality(suggested, false);
+  }
+  if (send) sendCurrentSettings();
+}
+
+document.querySelectorAll('#modeSeg button').forEach((btn) => {
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
 });
 
 document.querySelectorAll('#qualitySeg button').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#qualitySeg button').forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentQuality = btn.dataset.quality;
-    $('customControls').style.display = currentQuality === 'custom' ? 'block' : 'none';
-    if (currentQuality !== 'custom') sendCurrentSettings();
-  });
+  btn.addEventListener('click', () => setQuality(btn.dataset.quality));
+});
+
+// ---------------- Tercihler (kısayol + arayüz) ----------------
+
+function populateHotkeySelect() {
+  const select = $('releaseHotkeySelect');
+  select.innerHTML = '';
+  for (const [key, def] of Object.entries(RELEASE_HOTKEYS)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = def.label;
+    select.appendChild(opt);
+  }
+  select.value = prefs.releaseHotkey;
+  updateHotkeyHint();
+}
+
+function updateHotkeyHint() {
+  const def = RELEASE_HOTKEYS[prefs.releaseHotkey];
+  if (def) $('hintHotkey').textContent = def.label;
+}
+
+$('releaseHotkeySelect').addEventListener('change', async () => {
+  prefs.releaseHotkey = $('releaseHotkeySelect').value;
+  await window.clientAPI.savePrefs({ releaseHotkey: prefs.releaseHotkey });
+  updateHotkeyHint();
+});
+
+$('autoHideToggle').addEventListener('change', async () => {
+  prefs.autoHideUi = $('autoHideToggle').checked;
+  await window.clientAPI.savePrefs({ autoHideUi: prefs.autoHideUi });
+  if (prefs.autoHideUi) scheduleUiHide();
+  else { clearTimeout(uiHideTimer); showUi(); }
+});
+
+$('hideUiToggle').addEventListener('change', async () => {
+  prefs.hideUiCompletely = $('hideUiToggle').checked;
+  await window.clientAPI.savePrefs({ hideUiCompletely: prefs.hideUiCompletely });
+  showUi();
 });
 
 $('applyCustomBtn').addEventListener('click', () => sendCurrentSettings());
