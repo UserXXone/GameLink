@@ -1,0 +1,58 @@
+{
+  "name": "gamelink-client",
+  "version": "2.5.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "build:ui": "node build.js",
+    "start": "npm run build:ui && electron .",
+    "build": "npm run build:ui && electron-builder --win"
+  },
+  "dependencies": {
+    "@fluentui/react-components": "^9.74.4",
+    "@fluentui/react-icons": "^2.0.334",
+    "node-machine-id": "^1.1.12",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.28.1"
+  },
+  "build": {
+    "appId": "com.gamelink.client",
+    "productName": "GameLink",
+    "files": [
+      "**/*",
+      "!node_modules/electron-builder${/*}",
+      "!src",
+      "!node_modules/esbuild${/*}",
+      "!node_modules/@esbuild${/*}"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "GameLink-Portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "GameLink-Kurulum.exe"
+    }
+  }
+}

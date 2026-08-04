@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>GameLink</title>
+<style>
+  /* Yalnızca gövde temeli. Görünümün tamamı Fluent UI'ın hazır koyu temasından
+     geliyor; burada özel renk/şekil tanımı yok. */
+  html, body, #root { margin: 0; height: 100%; }
+  body {
+    background: #141414; /* Fluent koyu tema zemini - açılışta beyaz parlama olmasın */
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+  input { -webkit-user-select: text; user-select: text; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="renderer.bundle.js"></script>
+</body>
+</html>

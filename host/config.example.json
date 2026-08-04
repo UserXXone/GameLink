@@ -1,0 +1,15 @@
+{
+  "hostCode": "İLK AÇILIŞTA OTOMATIK ÜRETİLİR (örn. A3F9-K2LX)",
+  "hostPassword": "",
+  "signalingUrl": "wss://sizin-domaininiz.com",
+  "trustedDevices": {},
+  "turn": {
+    "url": "",
+    "username": "",
+    "credential": ""
+  },
+  "iceMode": "auto",
+  "clipboardSync": true,
+  "minimizeToTray": true,
+  "captureSourceId": null
+}
