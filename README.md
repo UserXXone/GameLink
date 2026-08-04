@@ -1,8 +1,4 @@
-# GameLink — Değişiklik Notları
-
-En yeni sürüm en üstte.
-
----
+# GameLink V3 — Değişiklik Notları
 
 # v3.0 — Fluent UI React'e Geçiş
 
