@@ -2,8 +2,6 @@
 
 **Güncel sürüm: v3.1** — ikinci imleç. Ayrıntılar: [DEGISIKLIKLER-v3.1.md](DEGISIKLIKLER-v3.1.md)
 
-Önceki sürüm: **v3.0** — [DEGISIKLIKLER-v3.0.md](DEGISIKLIKLER-v3.0.md). İçeriği aşağıda.
-
 ---
 
 ## v3.0
