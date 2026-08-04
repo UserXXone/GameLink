@@ -133,6 +133,7 @@ client/index.html       "İmleç" seçim düğmeleri + özel imleç görseli
 client/main.js          cursorMode tercihi
 ```
 ---
+e-posta: mehmetozkal12@gmail.com
 
 ## v3.0 (Old)
 
