@@ -134,7 +134,7 @@ client/main.js          cursorMode tercihi
 ```
 ---
 
-## v3.0
+## v3.0 (Old)
 
 v2.15'in (buton gizleme, kısayol, keyboard lock) üzerine eklenen üç ana özellik.
 
