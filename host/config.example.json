@@ -8,8 +8,6 @@
     "username": "",
     "credential": ""
   },
-  "iceMode": "auto",
   "clipboardSync": true,
-  "minimizeToTray": true,
   "captureSourceId": null
 }

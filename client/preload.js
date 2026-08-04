@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('clientAPI', {
 
   readClipboard: () => ipcRenderer.invoke('clipboard-read'),
   writeClipboard: (text) => ipcRenderer.send('clipboard-write', text),
+
+  setFullscreen: (on) => ipcRenderer.send('set-fullscreen', on),
 });

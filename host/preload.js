@@ -20,5 +20,11 @@ contextBridge.exposeInMainWorld('hostAPI', {
   injectKey: (scan, ext, down) => ipcRenderer.send('input', { t: 'k', scan, ext, down }),
   releaseAllInputs: () => ipcRenderer.send('input', { t: 'r' }),
 
+  // İkinci imleç: konum 0..1 oranlı gelir, gerçek piksele main process çevirir.
+  setGhostMode: (on) => ipcRenderer.send('ghost-mode', !!on),
+  ghostMove: (u, v) => ipcRenderer.send('ghost-move', { u, v }),
+  ghostButton: (btn, down) => ipcRenderer.send('ghost-button', { btn, down }),
+  ghostWheel: (delta, horizontal) => ipcRenderer.send('ghost-wheel', { delta, h: !!horizontal }),
+
   setStatus: (s) => ipcRenderer.send('set-status', s),
 });

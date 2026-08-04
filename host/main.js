@@ -17,6 +17,21 @@ let bridgeStopping = false;
 // değiştirmek istediğinde önce burayı günceller, sonra getDisplayMedia'yı tekrar çağırır.
 let selectedSourceId = null;
 
+// desktopCapturer kaynak id'si -> Electron display id. İkinci imlecin hangi
+// monitörün koordinat sistemine oturacağını bulmak için gerekli.
+const sourceDisplayMap = new Map();
+// selectedSourceId boş/geçersizken hangi kaynağın paylaşıldığı (listedeki ilki).
+let fallbackSourceId = null;
+
+// ---- İkinci imleç (hayalet imleç) ----
+let overlayWin = null;
+let ghostMode = false;
+let lastGhostPoint = null;
+// overlay.html'de okun ucu pencerenin (12,12) noktasında; pencereyi bu kadar
+// sola/yukarı kaydırırsak okun ucu tam hedef pikselin üstüne gelir.
+const GHOST_HOTSPOT = 12;
+const GHOST_WIN_SIZE = 56;
+
 // ---------------- Config yönetimi ----------------
 
 function generateCodeFromMachine() {
@@ -121,8 +136,13 @@ async function listScreenSources() {
     thumbnailSize: { width: 0, height: 0 },
   });
   const displays = screen.getAllDisplays();
+  sourceDisplayMap.clear();
+  fallbackSourceId = sources.length ? sources[0].id : null;
   return sources.map((s, i) => {
-    const display = displays.find((d) => String(d.id) === String(s.display_id));
+    const display = displays.find((d) => String(d.id) === String(s.display_id))
+      || displays[i]
+      || screen.getPrimaryDisplay();
+    if (display) sourceDisplayMap.set(s.id, display.id);
     const size = display ? `${display.size.width}×${display.size.height}` : null;
     return {
       id: s.id,
@@ -130,6 +150,21 @@ async function listScreenSources() {
       primary: display ? display.id === screen.getPrimaryDisplay().id : i === 0,
     };
   });
+}
+
+// Şu an paylaşılan monitörün Electron display nesnesi. İkinci imlecin oranlı
+// (0..1) konumu bu monitörün sınırlarına oturtulur.
+function captureDisplay() {
+  const displays = screen.getAllDisplays();
+  // setDisplayMediaRequestHandler ile aynı seçim kuralı: seçili kaynak listede
+  // yoksa ilk kaynak paylaşılıyor demektir.
+  const sourceId = sourceDisplayMap.has(selectedSourceId) ? selectedSourceId : fallbackSourceId;
+  const displayId = sourceDisplayMap.get(sourceId);
+  if (displayId != null) {
+    const found = displays.find((d) => d.id === displayId);
+    if (found) return found;
+  }
+  return screen.getPrimaryDisplay();
 }
 
 // ---------------- Ekran paylaşımı (onay ekranı olmadan) ----------------
@@ -189,16 +224,19 @@ function createWindow() {
     }
   });
 
-  // Pencere gerçekten yok edildiğinde (tepsiye inme kapalıyken X'e basılması,
-  // ya da çıkış sırasında) referansı temizle. Aksi halde tepsi menüsündeki
-  // "Pencereyi Göster" yok edilmiş bir BrowserWindow'a erişmeye çalışıp çöker.
-  mainWindow.on('closed', () => { mainWindow = null; });
+  // Pencere gerçekten yok edildiyse referansı bırak: tepsi menüsü yok edilmiş bir
+  // pencereye dokunursa "Object has been destroyed" ile çöküyordu. Katman penceresi
+  // de burada kapanmalı, yoksa görünmez bir pencere uygulamayı ayakta tutar.
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    setGhostMode(false);
+  });
 }
 
 // ---------------- Sistem tepsisi ----------------
 
 function showMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setSkipTaskbar(false);
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -236,6 +274,103 @@ function createTray() {
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
   tray.on('double-click', showMainWindow);
   refreshTray();
+}
+
+// ---------------- İkinci imleç (hayalet imleç) ----------------
+//
+// Windows'ta masaüstü başına yalnızca TEK sistem imleci vardır; gerçekten bağımsız
+// ikinci bir imleç ancak ayrı bir oturumda (RDP) mümkün. Burada yapılan şey, ikinci
+// imleci taklit etmek:
+//   1) Client'ın imleci host'un GERÇEK imlecine hiç dokunmadan hareket eder; host
+//      kullanıcısı kendi faresiyle çalışmaya devam eder.
+//   2) Host, ikinci imleci tıklama geçirgen bir katman penceresiyle görür.
+//   3) Tıklama/tekerlek anında gerçek imleç birkaç milisaniye "ödünç alınır"
+//      (input-bridge.ps1 -> Borrow-Begin/Borrow-End) ve hemen geri konur.
+// Katman penceresi setContentProtection ile ekran yakalamadan hariç tutulur, yoksa
+// client hem kendi imlecini hem de gecikmeli katman imlecini görürdü.
+
+function createOverlay() {
+  if (overlayWin && !overlayWin.isDestroyed()) return;
+  overlayWin = new BrowserWindow({
+    width: GHOST_WIN_SIZE,
+    height: GHOST_WIN_SIZE,
+    x: -GHOST_WIN_SIZE * 2, // ilk konum gelene kadar ekran dışında dursun
+    y: -GHOST_WIN_SIZE * 2,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  // Katman hiçbir tıklamayı yakalamamalı, odak çalmamalı.
+  overlayWin.setIgnoreMouseEvents(true, { forward: false });
+  overlayWin.setAlwaysOnTop(true, 'screen-saver');
+  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // Ekran paylaşımından hariç tut (Win10 2004+ WDA_EXCLUDEFROMCAPTURE).
+  try { overlayWin.setContentProtection(true); } catch { /* desteklenmiyorsa görünür kalır */ }
+  overlayWin.loadFile('overlay.html');
+  overlayWin.once('ready-to-show', () => {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.showInactive();
+  });
+  overlayWin.on('closed', () => { overlayWin = null; });
+}
+
+function destroyOverlay() {
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy();
+  overlayWin = null;
+}
+
+function setGhostMode(on) {
+  const next = !!on;
+  if (next === ghostMode) return;
+  ghostMode = next;
+  if (ghostMode) {
+    createOverlay();
+  } else {
+    // Yarım kalmış bir sürükleme varsa köprü gerçek imleci sahibine iade etsin.
+    writeInput({ t: 'gx' });
+    lastGhostPoint = null;
+    destroyOverlay();
+  }
+}
+
+const clamp01 = (n) => (typeof n === 'number' && isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
+
+// Client oranlı (0..1) konum gönderir; burada önce paylaşılan monitörün DIP
+// sınırlarına, sonra dipToScreenPoint ile GERÇEK piksel koordinatına çevrilir.
+// PowerShell köprüsü DPI farkında olduğu için fiziksel piksel bekliyor.
+function moveGhost(u, v) {
+  if (!ghostMode) return;
+  const bounds = captureDisplay().bounds;
+  const dip = {
+    x: Math.round(bounds.x + clamp01(u) * (bounds.width - 1)),
+    y: Math.round(bounds.y + clamp01(v) * (bounds.height - 1)),
+  };
+
+  let physical;
+  try {
+    physical = screen.dipToScreenPoint(dip);
+  } catch {
+    physical = dip; // Windows dışı / API yoksa DIP zaten piksel demektir
+  }
+
+  if (!lastGhostPoint || lastGhostPoint.x !== physical.x || lastGhostPoint.y !== physical.y) {
+    lastGhostPoint = physical;
+    writeInput({ t: 'gp', x: physical.x, y: physical.y });
+  }
+
+  // Katman penceresi DIP koordinatlarıyla konumlanır (setPosition DIP bekler).
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    overlayWin.setPosition(dip.x - GHOST_HOTSPOT, dip.y - GHOST_HOTSPOT);
+  }
 }
 
 // ---------------- Girdi enjeksiyon köprüsü (PowerShell, kalıcı süreç) ----------------
@@ -300,10 +435,14 @@ app.whenReady().then(() => {
   startInputBridge();
   createWindow();
   createTray();
+  // Kaynak -> monitör eşlemesini erkenden doldur: ikinci imlecin koordinat
+  // dönüşümü buna bağlı, renderer listeyi istemeden de hazır olsun.
+  listScreenSources().catch(() => {});
 });
 
 app.on('before-quit', () => {
   isQuitting = true;
+  setGhostMode(false); // yarım kalan sürüklemeyi bitirip gerçek imleci iade et
   stopInputBridge();
 });
 
@@ -360,7 +499,6 @@ ipcMain.handle('regenerate-code', () => {
   const cfg = loadConfig();
   cfg.hostCode = generateRandomCode();
   saveConfig(cfg);
-  refreshTray();
   return publicConfig(cfg);
 });
 
@@ -415,6 +553,19 @@ ipcMain.handle('evaluate-join', (_e, { hwid, deviceName, passwordHash }) => {
 });
 
 ipcMain.on('input', (_e, cmd) => writeInput(cmd));
+
+// ---- İkinci imleç ----
+ipcMain.on('ghost-mode', (_e, on) => setGhostMode(on));
+ipcMain.on('ghost-move', (_e, { u, v }) => moveGhost(u, v));
+ipcMain.on('ghost-button', (_e, { btn, down }) => {
+  if (!ghostMode) return;
+  writeInput({ t: 'gb', btn, down: !!down });
+});
+ipcMain.on('ghost-wheel', (_e, { delta, h }) => {
+  if (!ghostMode) return;
+  writeInput({ t: 'gw', delta, h: !!h });
+});
+
 ipcMain.on('set-status', (_e, status) => {
   console.log('[STATUS]', status);
   if (typeof status === 'string' && status.length) {

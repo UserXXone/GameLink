@@ -132,11 +132,11 @@ ipcMain.handle('remove-connection', (_e, id) => {
 const DEFAULT_PREFS = {
   releaseHotkey: 'CtrlLeft+AltLeft',  // yakalamadan çıkış kısayolu
   autoHideUi: true,                    // butonlar/ipuçları 5sn sonra gizlensin
-  hideUiCompletely: false,             // yakalama sırasında butonları anında gizle
+  hideUiCompletely: false,             // butonları tamamen gizle
   mode: 'game',
   quality: 'balanced',
-  clipboardSync: true,           // panoyu host ile eşitle
   minimizeToTray: true,          // küçültünce görev çubuğu yerine tepsiye insin
+  cursorMode: 'single',          // 'single' = host'un imlecini sür, 'ghost' = ikinci imleç
 };
 
 ipcMain.handle('get-prefs', () => {
@@ -151,10 +151,11 @@ ipcMain.handle('save-prefs', (_e, partial) => {
   return cfg.prefs;
 });
 
-// Tam ekran tamamen renderer'daki DOM Fullscreen API'si ile yönetiliyor
-// (Keyboard Lock'un çalışması için zaten DOM tam ekranı şart). Buradan ayrıca
-// BrowserWindow.setFullScreen çağırmak iki ayrı tam ekran durumu yaratıyordu.
 ipcMain.handle('clipboard-read', () => clipboard.readText());
 ipcMain.on('clipboard-write', (_e, text) => {
   if (typeof text === 'string') clipboard.writeText(text);
+});
+
+ipcMain.on('set-fullscreen', (_e, on) => {
+  if (mainWindow) mainWindow.setFullScreen(!!on);
 });

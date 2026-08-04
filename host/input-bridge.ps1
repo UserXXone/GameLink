@@ -28,6 +28,9 @@ public static class InputSim
         public uint time; public IntPtr dwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X; public int Y; }
+
     const uint INPUT_MOUSE = 0;
     const uint INPUT_KEYBOARD = 1;
 
@@ -48,6 +51,39 @@ public static class InputSim
     [DllImport("user32.dll", SetLastError = true)]
     static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool GetCursorPos(out POINT lpPoint);
+
+    // Fiziksel fare/klavyeyi kısa süreliğine dondurur. ÖNEMLİ: BlockInput'u çağıran
+    // thread'in SendInput çağrıları engellenmez - "ödünç tıklama" bu yüzden mümkün.
+    // Yükseltilmiş (yönetici) haklar ister; değilse sessizce false döner.
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool BlockInput(bool fBlockIt);
+
+    [DllImport("user32.dll")]
+    static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    // SetCursorPos/GetCursorPos, DPI farkında OLMAYAN bir süreçte ölçeklenmiş
+    // (sanal) koordinatlarla çalışır. Electron tarafı bize gerçek fiziksel piksel
+    // gönderdiği için bu süreci de fiziksel piksel uzayına almamız şart; aksi halde
+    // %125/%150 ölçekli ekranlarda ikinci imleç kaymış konuma tıklar.
+    public static void MakeDpiAware()
+    {
+        try
+        {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4  (Win10 1703+)
+            if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return;
+        }
+        catch { /* eski Windows: giriş noktası yok */ }
+        try { SetProcessDPIAware(); } catch { }
+    }
+
     // ÖNEMLİ: dx/dy burada MOUSEEVENTF_MOVE ile RELATIVE (göreli) hareket olarak
     // yorumlanır - MOUSEEVENTF_ABSOLUTE bayrağı KULLANILMIYOR. Oyunlarda kameranın
     // sürekli dönmesi sorununun kökü buydu; artık gerçek fare deltası uygulanıyor.
@@ -59,6 +95,23 @@ public static class InputSim
         inputs[0].U.mi.dy = dy;
         inputs[0].U.mi.dwFlags = MOUSEEVENTF_MOVE;
         SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    public static void SetPos(int x, int y)
+    {
+        SetCursorPos(x, y);
+    }
+
+    public static int[] GetPos()
+    {
+        POINT p;
+        if (!GetCursorPos(out p)) return null;
+        return new int[] { p.X, p.Y };
+    }
+
+    public static void Block(bool on)
+    {
+        try { BlockInput(on); } catch { }
     }
 
     public static void MouseButton(string button, bool down)
@@ -103,6 +156,8 @@ public static class InputSim
 
 Add-Type -TypeDefinition $code -Language CSharp
 
+[InputSim]::MakeDpiAware()
+
 # ---- Basılı durum takibi ----
 # Köprünün kendisi neyi bastığını bilir; böylece bağlantı koptuğunda (ya da bu süreç
 # kapanırken) hiçbir tuş/buton basılı kalmaz. "Forza'da gaz tuşunun yapışması"
@@ -110,16 +165,99 @@ Add-Type -TypeDefinition $code -Language CSharp
 $pressedKeys = @{}      # "scan:ext" -> @{ scan = <int>; ext = <bool> }
 $pressedButtons = @{}   # "left"/"right"/"middle" -> $true
 
+# ---- İkinci imleç (ghost) durumu ----
+# Windows'ta masaüstü başına TEK sistem imleci vardır; ikinci bir imleç ancak
+# "hayalet imleç" olarak taklit edilebilir:
+#   * Konum ($ghost) yalnızca burada tutulur, gerçek imlece dokunulmaz -> host
+#     kullanıcısı kendi faresini kullanmaya devam eder.
+#   * Tıklama anında imleç bir kaç milisaniyeliğine ödünç alınır: fiziksel girdi
+#     BlockInput ile dondurulur, imleç hayaletin konumuna götürülür, tıklama
+#     enjekte edilir, imleç eski yerine geri konur, blok kalkar.
+#   * Sürükleme sırasında (buton basılıyken) imleç hayaleti takip etmek zorundadır;
+#     buton bırakılınca kaydedilen konuma geri döner.
+$ghost = @{ x = 0; y = 0; valid = $false }
+$ghostOwning = $false   # şu an gerçek imleci hayalet mi tutuyor (sürükleme)
+$savedPos = $null       # ödünç almadan önceki gerçek imleç konumu
+
+function Restore-Ghost {
+    if ($null -ne $script:savedPos) {
+        try { [InputSim]::SetPos($script:savedPos[0], $script:savedPos[1]) } catch { }
+        $script:savedPos = $null
+    }
+    $script:ghostOwning = $false
+}
+
+function Borrow-Begin {
+    # Ödünç alma başlangıcı: fiziksel girdiyi dondur ve gerçek imlecin yerini sakla.
+    [InputSim]::Block($true)
+    if (-not $script:ghostOwning -and $null -eq $script:savedPos) {
+        $script:savedPos = [InputSim]::GetPos()
+    }
+    if ($script:ghost.valid) {
+        try { [InputSim]::SetPos([int]$script:ghost.x, [int]$script:ghost.y) } catch { }
+    }
+}
+
+function Borrow-End {
+    [InputSim]::Block($false)
+}
+
+function Ghost-Button {
+    param([string]$btn, [bool]$down)
+    if (-not $script:ghost.valid) { return }
+    Borrow-Begin
+    try {
+        [InputSim]::MouseButton($btn, $down)
+        if ($down) {
+            $script:pressedButtons[$btn] = $true
+            # Sürükleme başladı: buton bırakılana kadar gerçek imleç hayaleti izler.
+            $script:ghostOwning = $true
+        } else {
+            $script:pressedButtons.Remove($btn)
+            if ($script:pressedButtons.Count -eq 0) { Restore-Ghost }
+        }
+    } finally { Borrow-End }
+}
+
+function Ghost-Wheel {
+    param([int]$delta, [bool]$horizontal)
+    # Tekerlek, imlecin ALTINDAKİ pencereye gider; bu yüzden burada da ödünç almak
+    # zorundayız. Sürükleme sürüyorsa imleç zaten hayalette, geri koymuyoruz.
+    if (-not $script:ghost.valid) { [InputSim]::Wheel($delta, $horizontal); return }
+    $wasOwning = $script:ghostOwning
+    Borrow-Begin
+    try {
+        [InputSim]::Wheel($delta, $horizontal)
+        if (-not $wasOwning -and $script:pressedButtons.Count -eq 0) { Restore-Ghost }
+    } finally { Borrow-End }
+}
+
 function Release-All {
     foreach ($entry in @($pressedKeys.Values)) {
         try { [InputSim]::Key([uint16]$entry.scan, [bool]$entry.ext, $false) } catch { }
     }
     $pressedKeys.Clear()
 
-    foreach ($btn in @($pressedButtons.Keys)) {
-        try { [InputSim]::MouseButton($btn, $false) } catch { }
+    if ($script:ghostOwning) {
+        # Hayalet sürükleme ortasında koptu: butonu hayaletin konumunda bırak,
+        # sonra gerçek imleci sahibine iade et.
+        [InputSim]::Block($true)
+        try {
+            foreach ($btn in @($pressedButtons.Keys)) {
+                try { [InputSim]::MouseButton($btn, $false) } catch { }
+            }
+            $pressedButtons.Clear()
+            Restore-Ghost
+        } finally { [InputSim]::Block($false) }
+    } else {
+        foreach ($btn in @($pressedButtons.Keys)) {
+            try { [InputSim]::MouseButton($btn, $false) } catch { }
+        }
+        $pressedButtons.Clear()
     }
-    $pressedButtons.Clear()
+
+    $script:savedPos = $null
+    $script:ghostOwning = $false
 }
 
 Write-Output "READY"
@@ -155,6 +293,26 @@ try {
                     else { $pressedKeys.Remove($key) }
                 }
                 "r" { Release-All }
+
+                # ---- İkinci imleç komutları (fiziksel piksel koordinatları) ----
+                "gp" {
+                    $ghost.x = [int]$cmd.x
+                    $ghost.y = [int]$cmd.y
+                    $ghost.valid = $true
+                    # Sürükleme sürüyorsa gerçek imleç hayaleti izlemek zorunda.
+                    if ($script:ghostOwning) { [InputSim]::SetPos([int]$ghost.x, [int]$ghost.y) }
+                }
+                "gb" { Ghost-Button -btn $cmd.btn -down ([bool]$cmd.down) }
+                "gw" {
+                    $horizontal = $false
+                    if ($null -ne $cmd.h) { $horizontal = [bool]$cmd.h }
+                    Ghost-Wheel -delta ([int]$cmd.delta) -horizontal $horizontal
+                }
+                # Hayalet mod kapatıldı: varsa sürüklemeyi bitir, imleci iade et.
+                "gx" {
+                    if ($script:ghostOwning) { Release-All }
+                    $ghost.valid = $false
+                }
             }
         } catch {
             # geçersiz satırı yoksay, döngü kesilmesin
@@ -162,6 +320,8 @@ try {
         }
     }
 } finally {
-    # stdin kapandı (host süreci öldü/kapandı) - hiçbir şey basılı kalmasın
+    # stdin kapandı (host süreci öldü/kapandı) - hiçbir şey basılı kalmasın ve
+    # gerçek imleç kesinlikle sahibine geri dönsün.
     Release-All
+    [InputSim]::Block($false)
 }
