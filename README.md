@@ -6,7 +6,7 @@ geçmez.
 
 **Güncel sürüm: v3.1.5**
 
-| | |
+
 | 📘 **Sıfırdan kurulum** | **[KURULUM.md](KURULUM.md)** — sunucu, DuckDNS, sertifika, host, client, TURN, otomatik başlatma, sorun giderme |
 | 🆕 Bu sürümde ne değişti | [DEGISIKLIKLER-v3.1.5.md](DEGISIKLIKLER-v3.1.5.md) |
 
