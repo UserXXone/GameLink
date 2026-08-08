@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>GameLink — Oturum</title>
+<script>
+  (function () {
+    var pref = (window.sessionAPI && window.sessionAPI.initialTheme) || 'system';
+    var dark = pref === 'dark'
+      || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  })();
+</script>
+<link rel="stylesheet" href="theme.css" />
+<style>
+  body { overflow: hidden; }
+
+  .peerbar {
+    position: relative; z-index: 1; flex-shrink: 0;
+    padding: 11px 14px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border); background: var(--card);
+  }
+  .peer-avatar {
+    width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; color: #fff;
+    display: grid; place-items: center; font-size: 14px; font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--violet));
+  }
+  .peer-info { flex: 1; min-width: 0; }
+  .peer-name { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peer-meta { font-size: 11px; color: var(--text-mute); margin-top: 1px; }
+
+  .tabs {
+    position: relative; z-index: 1; flex-shrink: 0; display: flex; gap: 2px;
+    padding: 8px 10px 0; background: var(--card); border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    background: transparent; color: var(--text-dim); border: none; border-radius: 8px 8px 0 0;
+    padding: 8px 13px; font-size: 12px; font-weight: 600; position: relative;
+  }
+  .tabs button:hover { background: var(--accent-soft); color: var(--text); }
+  .tabs button.active { color: var(--accent); }
+  .tabs button.active::after {
+    content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px;
+    height: 2px; border-radius: 2px; background: var(--accent);
+  }
+  .tabs .badge {
+    display: none; margin-left: 5px; padding: 1px 6px; border-radius: 999px;
+    background: var(--red); color: #fff; font-size: 10px; vertical-align: middle;
+  }
+  .tabs .badge.show { display: inline-block; }
+
+  .panel { display: none; flex: 1; min-height: 0; padding: 12px 14px; overflow-y: auto; }
+  .panel.active { display: flex; flex-direction: column; }
+
+  /* Bilgi sekmesi */
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .kv:last-child { border-bottom: none; }
+  .kv span { color: var(--text-mute); }
+  .kv b { font-weight: 600; text-align: right; word-break: break-word; }
+</style>
+</head>
+<body>
+
+<div class="peerbar">
+  <div class="peer-avatar" id="peerAvatar">?</div>
+  <div class="peer-info">
+    <div class="peer-name" id="peerName">Bağlanıyor...</div>
+    <div class="peer-meta" id="peerMeta">—</div>
+  </div>
+  <button id="disconnectBtn" class="danger" title="Bu cihazın bağlantısını kes">Bağlantıyı kes</button>
+</div>
+
+<div class="tabs" id="tabs">
+  <button data-tab="chat" class="active">💬 Sohbet<span class="badge" id="chatBadge">0</span></button>
+  <button data-tab="files">📁 Dosyalar<span class="badge" id="fileBadge">0</span></button>
+  <button data-tab="info">ℹ️ Bilgi</button>
+</div>
+
+<div class="panel active" id="panel-chat">
+  <div class="chat-log" id="chatLog"></div>
+  <div class="chat-input">
+    <input id="chatInput" type="text" placeholder="Mesaj yazın..." maxlength="2000" />
+    <button id="chatSendBtn">Gönder</button>
+  </div>
+</div>
+
+<div class="panel" id="panel-files">
+  <div class="row" style="margin-bottom:10px;">
+    <button id="pickFilesBtn">📎 Dosya gönder</button>
+    <button id="clearFilesBtn" class="secondary">Listeyi temizle</button>
+  </div>
+  <div class="dropzone" id="dropzone">Dosyaları buraya sürükleyip bırakın</div>
+  <div class="transfer-list" id="transferList" style="margin-top:10px;"></div>
+</div>
+
+<div class="panel" id="panel-info">
+  <div class="kv"><span>Cihaz</span><b id="infoDevice">—</b></div>
+  <div class="kv"><span>Donanım kimliği</span><b id="infoHwid">—</b></div>
+  <div class="kv"><span>Bağlantı türü</span><b id="infoTransport">—</b></div>
+  <div class="kv"><span>Gecikme (RTT)</span><b id="infoRtt">—</b></div>
+  <div class="kv"><span>Gönderilen</span><b id="infoBitrate">—</b></div>
+  <div class="kv"><span>Çözünürlük</span><b id="infoResolution">—</b></div>
+  <div class="kv"><span>İmleç modu</span><b id="infoCursor">—</b></div>
+  <div class="kv"><span>Süre</span><b id="infoDuration">—</b></div>
+  <div class="hint-note">Bu pencereyi kapatmak oturumu kesmez. Oturum penceresinin
+    hiç açılmamasını isterseniz ana penceredeki <b>Oturum</b> sekmesinden kapatın.</div>
+</div>
+
+<script src="session.js"></script>
+</body>
+</html>

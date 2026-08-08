@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>GameLink Host</title>
+<script>
+  /* Tema, ilk kare çizilmeden ÖNCE seçilir. Tercih preload üzerinden senkron
+     geldiği için "önce açık sonra koyu" gibi bir flaş oluşmaz. */
+  (function () {
+    var pref = (window.hostAPI && window.hostAPI.initialTheme) || 'system';
+    var dark = pref === 'dark'
+      || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  })();
+</script>
+<link rel="stylesheet" href="theme.css" />
+<style>
+  /* Bu dosyaya özgü parçalar; ortak tokenler ve bileşenler theme.css'te. */
+
+  /* ---------------- Sekmeler ---------------- */
+  .tabs {
+    position: relative; z-index: 1; flex-shrink: 0; display: flex; gap: 2px;
+    padding: 8px 10px 0; background: var(--card); border-bottom: 1px solid var(--border);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button {
+    background: transparent; color: var(--text-dim); border: none; border-radius: 8px 8px 0 0;
+    padding: 8px 13px; font-size: 12px; font-weight: 600; position: relative;
+  }
+  .tabs button:hover { background: var(--accent-soft); color: var(--text); }
+  .tabs button.active { color: var(--accent); background: transparent; }
+  .tabs button.active::after {
+    content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px;
+    height: 2px; border-radius: 2px; background: var(--accent);
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ---------------- Kod kartı (hero) ---------------- */
+  .hero {
+    position: relative; overflow: hidden; border-radius: 18px; padding: 18px;
+    margin-bottom: 14px; color: #fff;
+    background:
+      radial-gradient(120% 130% at 0% 0%, #6366f1 0%, transparent 55%),
+      radial-gradient(110% 120% at 100% 10%, #06b6d4 0%, transparent 50%),
+      radial-gradient(130% 130% at 60% 130%, #ec4899 0%, transparent 55%),
+      linear-gradient(135deg, #3730a3, #1e2a63);
+    box-shadow: 0 14px 34px rgba(55,48,163,.35);
+  }
+  /* Dekoratif halkalar - AnyDesk tarzı hareketli olmayan geometrik vurgular. */
+  .hero::before, .hero::after {
+    content: ''; position: absolute; border-radius: 50%; pointer-events: none;
+    border: 1.5px solid rgba(255,255,255,.16);
+  }
+  .hero::before { width: 190px; height: 190px; right: -70px; top: -80px; }
+  .hero::after  { width: 110px; height: 110px; right: -20px; bottom: -60px; background: rgba(255,255,255,.05); border-color: transparent; }
+  .hero-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
+    color: rgba(255,255,255,.75); margin-bottom: 9px; font-weight: 600;
+  }
+  .code-display {
+    position: relative; font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 27px; font-weight: 700; letter-spacing: 3px; text-align: center;
+    padding: 13px 10px; border-radius: 11px; color: #fff;
+    background: rgba(255,255,255,.13); border: 1px solid rgba(255,255,255,.20);
+    -webkit-user-select: all; user-select: all;
+  }
+  .hero-actions { position: relative; display: flex; gap: 8px; margin-top: 11px; }
+  .hero-actions button {
+    flex: 1; padding: 8px 10px; border-radius: 9px; border: 1px solid rgba(255,255,255,.24);
+    background: rgba(255,255,255,.14); color: #fff; font-weight: 600; font-size: 12px;
+    cursor: pointer; transition: background var(--speed);
+  }
+  .hero-actions button:hover { background: rgba(255,255,255,.26); }
+  .hero-hint { position: relative; font-size: 11px; color: rgba(255,255,255,.85); height: 15px; margin-top: 7px; }
+
+  /* ---------------- Uyarı şeridi ---------------- */
+  .banner {
+    display: none; align-items: flex-start; gap: 9px; padding: 10px 12px; margin-bottom: 12px;
+    border-radius: var(--radius-sm); font-size: 11.5px; line-height: 1.5;
+    border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+    background: color-mix(in srgb, var(--amber) 12%, transparent); color: var(--text);
+  }
+  .banner.show { display: flex; }
+
+  /* Kayıt göstergesi */
+  .rec-dot {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex-shrink: 0;
+    animation: recpulse 1.2s ease-in-out infinite;
+  }
+  @keyframes recpulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="logo">🔗</div>
+  <div class="brand">
+    <h1>GameLink Host</h1>
+    <div class="sub" id="versionText">v4.0.0</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="status-pill">
+    <div id="statusDot" class="dot"></div>
+    <span id="statusText" class="status-text">Başlatılıyor...</span>
+  </div>
+  <div class="theme-seg" id="themeSeg">
+    <button data-theme="system" title="Sistem temasını izle">🖥</button>
+    <button data-theme="light" title="Açık tema">☀</button>
+    <button data-theme="dark" title="Koyu tema">🌙</button>
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <button data-tab="baglanti" class="active">Bağlantı</button>
+  <button data-tab="ekran">Ekran</button>
+  <button data-tab="oturum">Oturum</button>
+  <button data-tab="program">Program</button>
+</div>
+
+<div class="content">
+
+  <div id="vmBanner" class="banner">
+    <span>⚙️</span>
+    <span id="vmBannerText"></span>
+  </div>
+
+  <!-- ============================ BAĞLANTI ============================ -->
+  <div class="panel active" id="panel-baglanti">
+
+    <div class="hero">
+      <div class="hero-label">Bağlantı Kodu</div>
+      <div id="codeDisplay" class="code-display">----&nbsp;----</div>
+      <div class="hero-actions">
+        <button id="copyCodeBtn">📋 Kopyala</button>
+        <button id="regenBtn">♻ Yeniden Üret</button>
+      </div>
+      <div id="copyHint" class="hero-hint">Bu kodu bağlanacak cihaza verin.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#f59e0b;--c2:#ef4444">🔒</span>Parola</h2>
+      <div class="row">
+        <input id="passwordInput" type="password" placeholder="Yeni parola girin" />
+        <button id="savePasswordBtn">Kaydet</button>
+      </div>
+      <div class="row">
+        <button id="clearPasswordBtn" class="secondary">Parolayı kaldır</button>
+      </div>
+      <div id="passwordHint" class="save-hint"></div>
+      <div class="hint-note">Parola diske düz metin olarak yazılmaz; tuzlanmış
+        <b>scrypt</b> özeti saklanır. Bir cihaz parolayla bir kez girdikten sonra
+        güvenilir listeye eklenir ve bir daha parola sorulmaz.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#06b6d4;--c2:#3b82f6">🌐</span>Sunucu Adresi</h2>
+      <div class="row">
+        <input id="urlInput" type="text" placeholder="wss://sizin-domaininiz.com" />
+        <button id="saveUrlBtn">Kaydet</button>
+      </div>
+      <div id="urlHint" class="save-hint"></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#6366f1;--c2:#4f7dff">🔀</span>Bağlantı Modu</h2>
+      <select id="iceModeSelect">
+        <option value="auto">Otomatik (önce doğrudan, olmazsa TURN)</option>
+        <option value="stun-only">Sadece STUN (yalnızca doğrudan bağlantı)</option>
+        <option value="turn-only">Sadece TURN (her şey röle üzerinden)</option>
+      </select>
+      <div id="iceModeHint" class="save-hint"></div>
+      <div class="hint-note">
+        <b>Otomatik:</b> en iyi seçenek — doğrudan bağlanmayı dener, başaramazsa TURN'e düşer.<br />
+        <b>Sadece STUN:</b> TURN hiç kullanılmaz. En düşük gecikme, ama CGNAT'li ağlarda (mobil veri) bağlanamayabilir.<br />
+        <b>Sadece TURN:</b> tüm trafik röle üzerinden gider. Daha tutarlı ama sunucunuzun bant genişliğini kullanır.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#3b82f6;--c2:#8b5cf6">🛰</span>TURN Sunucusu <span style="color:var(--text-mute);font-weight:400;">(isteğe bağlı)</span></h2>
+      <div class="row">
+        <input id="turnUrlInput" type="text" placeholder="turn:sizin-domaininiz.com:3478" />
+      </div>
+      <div class="row">
+        <input id="turnUserInput" type="text" placeholder="kullanıcı" />
+        <input id="turnPassInput" type="password" placeholder="parola" />
+      </div>
+      <div class="row">
+        <button id="saveTurnBtn">Kaydet</button>
+      </div>
+      <div id="turnHint" class="save-hint"></div>
+      <div class="hint-note">Mobil veri (CGNAT) gibi STUN'un yetmediği durumlarda gerekir.
+        Buraya yazdığınız bilgi bağlantı sırasında client'a otomatik iletilir —
+        client tarafında ayrıca ayar yapmanız gerekmez.</div>
+    </div>
+
+  </div>
+
+  <!-- ============================ EKRAN ============================ -->
+  <div class="panel" id="panel-ekran">
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#22c55e;--c2:#14b8a6">🖥</span>Paylaşılan Kaynak</h2>
+      <div class="row">
+        <select id="sourceSelect"></select>
+        <button id="refreshSourcesBtn" class="secondary" title="Listeyi yenile">↻</button>
+      </div>
+      <div class="check-row">
+        <input id="allowWindowCaptureToggle" type="checkbox" />
+        <label for="allowWindowCaptureToggle">Tek pencere paylaşımına izin ver (client seçebilsin)</label>
+      </div>
+      <div class="hint-note">Bağlıyken de değiştirebilirsiniz; görüntü kesilmeden geçer.
+        Client de bu listeden seçim yapabilir. <b>Pencere paylaşımında</b> yalnızca o
+        pencerenin içeriği gider — üstünü kapatan başka pencereler görüntüye girmez.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#8b5cf6;--c2:#06b6d4">🎞</span>Video Kodeği</h2>
+      <select id="codecSelect">
+        <option value="auto">Otomatik (tarayıcı seçsin)</option>
+        <option value="h264">H.264 — en yaygın donanım desteği, en düşük gecikme</option>
+        <option value="vp9">VP9 — aynı bit hızında daha temiz görüntü, daha çok CPU</option>
+        <option value="vp8">VP8 — en uyumlu, en zayıf sıkıştırma</option>
+        <option value="av1">AV1 — en iyi sıkıştırma, çok yüksek CPU (destek varsa)</option>
+      </select>
+      <div class="hint-note">Kodeği teklifi veren taraf (host) belirler.
+        <b>Bir sonraki bağlantıda</b> geçerli olur. Seçtiğiniz kodek bu sistemde yoksa
+        sessizce otomatik seçime dönülür — günlükte belirtilir.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#0ea5e9;--c2:#6366f1">📐</span>Ekran Çözünürlüğü</h2>
+      <div class="row">
+        <select id="resolutionSelect"></select>
+        <button id="applyResolutionBtn">Uygula</button>
+      </div>
+      <div class="row">
+        <button id="refreshResolutionBtn" class="secondary">Listeyi yenile</button>
+        <button id="restoreResolutionBtn" class="secondary">Eski çözünürlüğe dön</button>
+      </div>
+      <div id="resolutionHint" class="save-hint"></div>
+      <div class="check-row">
+        <input id="allowResolutionToggle" type="checkbox" />
+        <label for="allowResolutionToggle">Client de çözünürlüğü değiştirebilsin</label>
+      </div>
+      <div class="hint-note">Bağlantı bittiğinde ve program kapanırken çözünürlük
+        <b>otomatik olarak</b> eski değerine döner.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#ef4444;--c2:#f59e0b">⏺</span>Ekran Kaydı</h2>
+      <div class="row">
+        <button id="recordBtn">⏺ Kaydı başlat</button>
+        <button id="openRecordDirBtn" class="secondary">Klasörü aç</button>
+      </div>
+      <div class="row">
+        <label for="recordBitrateInput" style="font-size:12px;color:var(--text-dim);white-space:nowrap;">Bit hızı (Mbps)</label>
+        <input id="recordBitrateInput" type="number" min="1" max="80" step="1" />
+        <button id="saveRecordBitrateBtn" class="secondary">Kaydet</button>
+      </div>
+      <div id="recordState" class="save-hint"></div>
+      <div class="hint-note">Kayıt <b>host'un kendi diskine</b>, ağdan etkilenmeden tam
+        kalitede yapılır (Videolar\GameLink). Client de kendi tarafında gördüğü akışı
+        kaydedebilir; ikisi bağımsızdır.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#ec4899;--c2:#8b5cf6">🖱</span>İmleç</h2>
+      <div id="cursorModeText" class="save-hint">Bağlantı yok</div>
+      <div class="hint-note">Modu uzaktaki kullanıcı seçer.
+        <b>İkinci imleç</b> modunda ekranda mavi "2" işaretli ayrı bir ok belirir; bu ok
+        sizin farenize dokunmaz, siz çalışmaya devam edebilirsiniz. Uzaktaki kullanıcı
+        tıkladığı anda gerçek imleç birkaç milisaniyeliğine ödünç alınıp hemen yerine
+        konur — sürükleme bitene kadar ise imleç onda kalır.</div>
+    </div>
+
+  </div>
+
+  <!-- ============================ OTURUM ============================ -->
+  <div class="panel" id="panel-oturum">
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#14b8a6;--c2:#06b6d4">🪟</span>Oturum Penceresi</h2>
+      <div class="check-row">
+        <input id="sessionWindowToggle" type="checkbox" />
+        <label for="sessionWindowToggle">Bir cihaz bağlandığında oturum penceresi açılsın</label>
+      </div>
+      <div class="hint-note">Kim bağlandı, ne kadar süredir bağlı, sohbet ve dosya
+        aktarımı bu küçük pencerede toplanır. Kapatırsanız oturum devam eder.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#8b5cf6;--c2:#6366f1">📋</span>Pano ve Sohbet</h2>
+      <div class="check-row">
+        <input id="clipboardToggle" type="checkbox" />
+        <label for="clipboardToggle">Panoyu client ile karşılıklı eşitle (metin)</label>
+      </div>
+      <div class="check-row">
+        <input id="chatToggle" type="checkbox" />
+        <label for="chatToggle">Yazışmaya izin ver</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#f59e0b;--c2:#22c55e">📁</span>Dosya Aktarımı</h2>
+      <div class="check-row">
+        <input id="fileTransferToggle" type="checkbox" />
+        <label for="fileTransferToggle">Dosya aktarımına izin ver</label>
+      </div>
+      <div class="check-row">
+        <input id="autoAcceptToggle" type="checkbox" />
+        <label for="autoAcceptToggle">Gelen dosyaları sormadan kabul et</label>
+      </div>
+      <div class="row">
+        <button id="downloadDirBtn" class="secondary">Kayıt klasörünü seç</button>
+        <button id="openDownloadDirBtn" class="secondary">Klasörü aç</button>
+      </div>
+      <div id="downloadDirText" class="hint-note"></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#06b6d4;--c2:#22c55e">📊</span>Sistem Bilgisi</h2>
+      <div class="check-row">
+        <input id="sysInfoToggle" type="checkbox" />
+        <label for="sysInfoToggle">Bu bilgisayarın kullanım bilgilerini client'a göster</label>
+      </div>
+      <div class="hint-note">İşlemci ve bellek kullanımı, disk ve ağ etkinliği, disk
+        doluluğu, işletim sistemi ve donanım adları. Yalnızca bağlı olan cihaza,
+        yalnızca oturum boyunca gider; hiçbir yere kaydedilmez.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#22c55e;--c2:#4f7dff">💻</span>Güvenilir Cihazlar</h2>
+      <div id="deviceList"></div>
+    </div>
+
+  </div>
+
+  <!-- ============================ PROGRAM ============================ -->
+  <div class="panel" id="panel-program">
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#14b8a6;--c2:#06b6d4">🪟</span>Pencere ve Başlangıç</h2>
+      <div class="check-row">
+        <input id="trayToggle" type="checkbox" />
+        <label for="trayToggle">Küçültünce sistem tepsisine in (görev çubuğunda durmasın)</label>
+      </div>
+      <div class="check-row">
+        <input id="autoStartToggle" type="checkbox" />
+        <label for="autoStartToggle">Windows açılışında otomatik başlat (tepsiye inik)</label>
+      </div>
+      <div id="autoStartHint" class="save-hint"></div>
+      <div class="hint-note">Host yönetici yetkisiyle çalıştığı için başlangıç klasörü
+        işe yaramaz; bunun yerine <b>Görev Zamanlayıcı</b>'da "en yüksek ayrıcalıklarla"
+        çalışan bir görev oluşturuluyor. Böylece açılışta UAC istemi çıkmaz.<br />
+        Kapatma düğmesi programı sonlandırmaz, tepsiye indirir. Tamamen çıkmak için
+        tepsi simgesine sağ tıklayıp Çıkış deyin.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#22c55e;--c2:#14b8a6">⬇</span>Otomatik Güncelleme</h2>
+      <div class="row">
+        <input id="updateUrlInput" type="text" placeholder="https://sizin-domaininiz.com/updates/host/" />
+        <button id="saveUpdateUrlBtn">Kaydet</button>
+      </div>
+      <div class="check-row">
+        <input id="autoUpdateToggle" type="checkbox" />
+        <label for="autoUpdateToggle">Açılışta güncellemeleri kendiliğinden denetle ve indir</label>
+      </div>
+      <div class="row">
+        <button id="checkUpdateBtn" class="secondary">Şimdi denetle</button>
+        <button id="installUpdateBtn" disabled>Yeniden başlat ve kur</button>
+      </div>
+      <div id="updateStatus" class="save-hint"></div>
+      <div class="hint-note">Kurulum dosyalarını ve electron-builder'ın ürettiği
+        <b>latest.yml</b> dosyasını bu adrese koyun. Adres boşken güncelleme denetimi
+        tamamen kapalıdır. Taşınabilir (portable) sürüm kendini güncelleyemez.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#64748b;--c2:#4f7dff">⚙️</span>Sanal Makine / VDS Uyumluluğu</h2>
+      <select id="vmModeSelect">
+        <option value="auto">Otomatik (sanal makine algılanırsa aç)</option>
+        <option value="on">Her zaman açık</option>
+        <option value="off">Kapalı</option>
+      </select>
+      <div id="vmHint" class="save-hint"></div>
+      <div class="hint-note">Sanal makinelerde ve VDS'lerde GPU ya yoktur ya da yazılım
+        öykünmesidir; Chromium'un donanım hızlandırması orada GPU sürecini çökertip
+        programın hiç açılmamasına yol açar. Bu mod donanım hızlandırmayı kapatır ve
+        ses aygıtı bulunamazsa yakalamayı sessiz olarak yeniden dener.
+        <b>Değişiklik programı yeniden başlatınca geçerli olur.</b></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#8b5cf6;--c2:#ec4899">💾</span>Ayarları Aktar</h2>
+      <div class="row">
+        <button id="exportBtn" class="secondary">Dışa aktar</button>
+        <button id="importBtn" class="secondary">İçe aktar</button>
+      </div>
+      <div id="configHint" class="save-hint"></div>
+      <div class="hint-note">Sunucu adresi, bağlantı kodu, TURN bilgileri, güvenilir
+        cihazlar ve tüm tercihler tek bir JSON dosyasına yazılır. Parola düz metin
+        değil, taşınabilir <b>scrypt özeti</b> olarak gider: dosyayı ele geçiren parolayı
+        öğrenemez, ama hedef makinede aynı parola çalışmaya devam eder.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="chip" style="--c1:#64748b;--c2:#475569">📜</span>Günlük</h2>
+      <div id="logBox" class="log"></div>
+      <div class="row">
+        <button id="openLogBtn" class="secondary">Günlük dosyasını aç</button>
+      </div>
+      <div class="hint-note">Program çökerse ya da hiç açılmazsa buradaki dosya
+        (kullanıcı klasörü altında <b>logs\host.log</b>) ne olduğunu gösterir.</div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Client'ın mikrofonu buradan çalar. Görünmez; ses için bir öğe gerekiyor. -->
+<audio id="micAudio" autoplay></audio>
+
+<script src="file-transfer.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>

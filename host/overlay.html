@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>GameLink İkinci İmleç</title>
+<style>
+  /* Bu pencere tıklama geçirgen, odaklanamaz ve ekran paylaşımına dahil edilmez
+     (main.js -> setContentProtection). Yani host kullanıcısı ikinci imleci görür,
+     client kendi imlecini yerel olarak çizdiği için görüntüde çift imleç olmaz. */
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    pointer-events: none; user-select: none;
+  }
+  /* Okun ucu, pencerenin (12,12) noktasında duruyor - main.js'teki HOTSPOT ile aynı. */
+  svg { position: absolute; left: 0; top: 0; }
+  .halo {
+    position: absolute; left: 12px; top: 12px;
+    width: 0; height: 0;
+  }
+  .halo::before {
+    content: ''; position: absolute;
+    left: -13px; top: -13px; width: 26px; height: 26px;
+    border-radius: 50%; border: 2px solid rgba(91, 140, 255, .55);
+    animation: pulse 2.2s ease-out infinite;
+  }
+  @keyframes pulse {
+    0%   { transform: scale(.45); opacity: .95; }
+    70%  { transform: scale(1.5); opacity: 0; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+  <div class="halo"></div>
+  <svg width="56" height="56" viewBox="0 0 56 56">
+    <!-- Ok: uç noktası (12,12). Koyu kontur + parlak dolgu, her arka planda görünür. -->
+    <path d="M12 12 L12 40 L19.5 32.5 L24.5 43 L29.5 40.5 L24.5 30.5 L34 30.5 Z"
+          fill="#5b8cff" stroke="#08101f" stroke-width="2.2" stroke-linejoin="round" />
+    <text x="36" y="24" font-family="Segoe UI, sans-serif" font-size="10" font-weight="700"
+          fill="#5b8cff" stroke="#08101f" stroke-width="2.6" paint-order="stroke">2</text>
+  </svg>
+</body>
+</html>

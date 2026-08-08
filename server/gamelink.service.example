@@ -1,0 +1,18 @@
+# /etc/systemd/system/gamelink.service
+# "KULLANICI_ADINIZ" ve yolu kendinize göre düzenleyin.
+
+[Unit]
+Description=GameLink Sinyalleşme Sunucusu
+After=network.target
+
+[Service]
+Type=simple
+User=KULLANICI_ADINIZ
+WorkingDirectory=/home/KULLANICI_ADINIZ/gamelink/server
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=PORT=8080
+
+[Install]
+WantedBy=multi-user.target
